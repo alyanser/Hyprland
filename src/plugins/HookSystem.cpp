@@ -14,10 +14,8 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
-CFunctionHook::CFunctionHook(HANDLE owner, void* source, void* destination) {
-    m_pSource      = source;
-    m_pDestination = destination;
-    m_pOwner       = owner;
+CFunctionHook::CFunctionHook(HANDLE owner, void* source, void* destination) : m_pSource(source), m_pDestination(destination), m_pOwner(owner) {
+    ;
 }
 
 CFunctionHook::~CFunctionHook() {
@@ -88,13 +86,16 @@ CFunctionHook::SAssembly CFunctionHook::fixInstructionProbeRIPCalls(const SInstr
             finalBytes[currentDestinationOffset + i] = *(char*)(currentAddress + i);
         }
 
-        std::string code = probe.assembly.substr(lastAsmNewline, probe.assembly.find("\n", lastAsmNewline) - lastAsmNewline);
+        std::string code = probe.assembly.substr(lastAsmNewline, probe.assembly.find('\n', lastAsmNewline) - lastAsmNewline);
         if (code.contains("%rip")) {
-            CVarList      tokens{code, 0, 's'};
-            size_t        plusPresent  = tokens[1][0] == '+' ? 1 : 0;
-            size_t        minusPresent = tokens[1][0] == '-' ? 1 : 0;
-            std::string   addr         = tokens[1].substr((plusPresent || minusPresent), tokens[1].find("(%rip)") - (plusPresent || minusPresent));
-            const int32_t OFFSET       = (minusPresent ? -1 : 1) * configStringToInt(addr);
+            CVarList    tokens{code, 0, 's'};
+            size_t      plusPresent  = tokens[1][0] == '+' ? 1 : 0;
+            size_t      minusPresent = tokens[1][0] == '-' ? 1 : 0;
+            std::string addr         = tokens[1].substr((plusPresent || minusPresent), tokens[1].find("(%rip)") - (plusPresent || minusPresent));
+            auto        addrResult   = configStringToInt(addr);
+            if (!addrResult)
+                return {};
+            const int32_t OFFSET = (minusPresent ? -1 : 1) * *addrResult;
             if (OFFSET == 0)
                 return {};
             const uint64_t DESTINATION = currentAddress + OFFSET + len;
@@ -129,7 +130,7 @@ CFunctionHook::SAssembly CFunctionHook::fixInstructionProbeRIPCalls(const SInstr
             currentDestinationOffset += len;
         }
 
-        lastAsmNewline = probe.assembly.find("\n", lastAsmNewline) + 1;
+        lastAsmNewline = probe.assembly.find('\n', lastAsmNewline) + 1;
         currentAddress += len;
     }
 

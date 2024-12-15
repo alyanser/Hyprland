@@ -96,7 +96,7 @@ typedef REQUIRED PLUGIN_DESCRIPTION_INFO (*PPLUGIN_INIT_FUNC)(HANDLE);
 
     Hooks are unloaded after exit.
 */
-typedef OPTIONAL void (*PPLUGIN_EXIT_FUNC)(void);
+typedef OPTIONAL void (*PPLUGIN_EXIT_FUNC)();
 #define PLUGIN_EXIT          pluginExit
 #define PLUGIN_EXIT_FUNC_STR "pluginExit"
 
@@ -104,6 +104,7 @@ typedef OPTIONAL void (*PPLUGIN_EXIT_FUNC)(void);
     End plugin methods
 */
 
+// NOLINTNEXTLINE(readability-identifier-naming)
 namespace HyprlandAPI {
 
     /*
@@ -187,7 +188,7 @@ namespace HyprlandAPI {
 
         returns: true on success. False otherwise.
     */
-    APICALL bool addNotification(HANDLE handle, const std::string& text, const CColor& color, const float timeMs);
+    APICALL bool addNotification(HANDLE handle, const std::string& text, const CHyprColor& color, const float timeMs);
 
     /*
         Creates a trampoline function hook to an internal hl func.
@@ -251,7 +252,7 @@ namespace HyprlandAPI {
         data has to contain:
          - text: std::string or const char*
          - time: uint64_t
-         - color: CColor -> CColor(0) will apply the default color for the notification icon
+         - color: CHyprColor -> CHyprColor(0) will apply the default color for the notification icon
 
         data may contain:
          - icon: eIcons
@@ -290,6 +291,7 @@ namespace HyprlandAPI {
     APICALL bool unregisterHyprCtlCommand(HANDLE handle, SP<SHyprCtlCommand> cmd);
 };
 
+// NOLINTBEGIN
 /*
     Get the hash this plugin/server was compiled with.
 
@@ -303,3 +305,4 @@ APICALL EXPORT const char*        __hyprland_api_get_hash();
 APICALL inline EXPORT const char* __hyprland_api_get_client_hash() {
     return GIT_COMMIT_HASH;
 }
+// NOLINTEND

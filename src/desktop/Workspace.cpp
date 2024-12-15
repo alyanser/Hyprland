@@ -11,12 +11,9 @@ PHLWORKSPACE CWorkspace::create(WORKSPACEID id, PHLMONITOR monitor, std::string 
     return workspace;
 }
 
-CWorkspace::CWorkspace(WORKSPACEID id, PHLMONITOR monitor, std::string name, bool special, bool isEmpty) {
-    m_pMonitor            = monitor;
-    m_iID                 = id;
-    m_szName              = name;
-    m_bIsSpecialWorkspace = special;
-    m_bWasCreatedEmpty    = isEmpty;
+CWorkspace::CWorkspace(WORKSPACEID id, PHLMONITOR monitor, std::string name, bool special, bool isEmpty) :
+    m_iID(id), m_szName(name), m_pMonitor(monitor), m_bIsSpecialWorkspace(special), m_bWasCreatedEmpty(isEmpty) {
+    ;
 }
 
 void CWorkspace::init(PHLWORKSPACE self) {
@@ -106,7 +103,7 @@ void CWorkspace::startAnim(bool in, bool left, bool instant) {
         const auto PMONITOR = m_pMonitor.lock();
         float      movePerc = 100.f;
 
-        if (ANIMSTYLE.find("%") != std::string::npos) {
+        if (ANIMSTYLE.find('%') != std::string::npos) {
             try {
                 auto percstr = ANIMSTYLE.substr(ANIMSTYLE.find_last_of(' ') + 1);
                 movePerc     = std::stoi(percstr.substr(0, percstr.length() - 1));
@@ -278,9 +275,9 @@ bool CWorkspace::matchesStaticSelector(const std::string& selector_) {
             // f - fullscreen state : f[-1], f[0], f[1], or f[2] for different fullscreen states
             //                        -1: no fullscreen, 0: fullscreen, 1: maximized, 2: fullscreen without sending fs state to window
 
-            const auto  NEXTSPACE = selector.find_first_of(' ', i);
-            std::string prop      = selector.substr(i, NEXTSPACE == std::string::npos ? std::string::npos : NEXTSPACE - i);
-            i                     = std::min(NEXTSPACE, std::string::npos - 1);
+            const auto  CLOSING_BRACKET = selector.find_first_of(']', i);
+            std::string prop            = selector.substr(i, CLOSING_BRACKET == std::string::npos ? std::string::npos : CLOSING_BRACKET + 1 - i);
+            i                           = std::min(CLOSING_BRACKET, std::string::npos - 1);
 
             if (cur == 'r') {
                 WORKSPACEID from = 0, to = 0;
@@ -296,7 +293,7 @@ bool CWorkspace::matchesStaticSelector(const std::string& selector_) {
                     return false;
                 }
 
-                const auto DASHPOS = prop.find("-");
+                const auto DASHPOS = prop.find('-');
                 const auto LHS = prop.substr(0, DASHPOS), RHS = prop.substr(DASHPOS + 1);
 
                 if (!isNumber(LHS) || !isNumber(RHS)) {
@@ -332,7 +329,7 @@ bool CWorkspace::matchesStaticSelector(const std::string& selector_) {
 
                 const auto SHOULDBESPECIAL = configStringToInt(prop);
 
-                if ((bool)SHOULDBESPECIAL != m_bIsSpecialWorkspace)
+                if (SHOULDBESPECIAL && (bool)*SHOULDBESPECIAL != m_bIsSpecialWorkspace)
                     return false;
                 continue;
             }
@@ -367,7 +364,7 @@ bool CWorkspace::matchesStaticSelector(const std::string& selector_) {
 
                 const auto WANTSNAMED = configStringToInt(prop);
 
-                if (WANTSNAMED != (m_iID <= -1337))
+                if (WANTSNAMED && *WANTSNAMED != (m_iID <= -1337))
                     return false;
                 continue;
             }
@@ -422,18 +419,18 @@ bool CWorkspace::matchesStaticSelector(const std::string& selector_) {
 
                     int count;
                     if (wantsCountGroup)
-                        count = g_pCompositor->getGroupsOnWorkspace(m_iID, wantsOnlyTiled == -1 ? std::nullopt : std::optional<bool>((bool)wantsOnlyTiled),
-                                                                    wantsCountVisible ? std::optional<bool>(wantsCountVisible) : std::nullopt);
+                        count = getGroups(wantsOnlyTiled == -1 ? std::nullopt : std::optional<bool>((bool)wantsOnlyTiled),
+                                          wantsCountVisible ? std::optional<bool>(wantsCountVisible) : std::nullopt);
                     else
-                        count = g_pCompositor->getWindowsOnWorkspace(m_iID, wantsOnlyTiled == -1 ? std::nullopt : std::optional<bool>((bool)wantsOnlyTiled),
-                                                                     wantsCountVisible ? std::optional<bool>(wantsCountVisible) : std::nullopt);
+                        count = getWindows(wantsOnlyTiled == -1 ? std::nullopt : std::optional<bool>((bool)wantsOnlyTiled),
+                                           wantsCountVisible ? std::optional<bool>(wantsCountVisible) : std::nullopt);
 
                     if (count != from)
                         return false;
                     continue;
                 }
 
-                const auto DASHPOS = prop.find("-");
+                const auto DASHPOS = prop.find('-');
                 const auto LHS = prop.substr(0, DASHPOS), RHS = prop.substr(DASHPOS + 1);
 
                 if (!isNumber(LHS) || !isNumber(RHS)) {
@@ -456,11 +453,11 @@ bool CWorkspace::matchesStaticSelector(const std::string& selector_) {
 
                 WORKSPACEID count;
                 if (wantsCountGroup)
-                    count = g_pCompositor->getGroupsOnWorkspace(m_iID, wantsOnlyTiled == -1 ? std::nullopt : std::optional<bool>((bool)wantsOnlyTiled),
-                                                                wantsCountVisible ? std::optional<bool>(wantsCountVisible) : std::nullopt);
+                    count = getGroups(wantsOnlyTiled == -1 ? std::nullopt : std::optional<bool>((bool)wantsOnlyTiled),
+                                      wantsCountVisible ? std::optional<bool>(wantsCountVisible) : std::nullopt);
                 else
-                    count = g_pCompositor->getWindowsOnWorkspace(m_iID, wantsOnlyTiled == -1 ? std::nullopt : std::optional<bool>((bool)wantsOnlyTiled),
-                                                                 wantsCountVisible ? std::optional<bool>(wantsCountVisible) : std::nullopt);
+                    count = getWindows(wantsOnlyTiled == -1 ? std::nullopt : std::optional<bool>((bool)wantsOnlyTiled),
+                                       wantsCountVisible ? std::optional<bool>(wantsCountVisible) : std::nullopt);
 
                 if (std::clamp(count, from, to) != count)
                     return false;
@@ -524,4 +521,139 @@ bool CWorkspace::inert() {
 
 MONITORID CWorkspace::monitorID() {
     return m_pMonitor ? m_pMonitor->ID : MONITOR_INVALID;
+}
+
+PHLWINDOW CWorkspace::getFullscreenWindow() {
+    for (auto const& w : g_pCompositor->m_vWindows) {
+        if (w->m_pWorkspace == m_pSelf && w->isFullscreen())
+            return w;
+    }
+
+    return nullptr;
+}
+
+bool CWorkspace::isVisible() {
+    return m_bVisible;
+}
+
+bool CWorkspace::isVisibleNotCovered() {
+    const auto PMONITOR = m_pMonitor.lock();
+    if (PMONITOR->activeSpecialWorkspace)
+        return PMONITOR->activeSpecialWorkspace->m_iID == m_iID;
+
+    return PMONITOR->activeWorkspace->m_iID == m_iID;
+}
+
+int CWorkspace::getWindows(std::optional<bool> onlyTiled, std::optional<bool> onlyVisible) {
+    int no = 0;
+    for (auto const& w : g_pCompositor->m_vWindows) {
+        if (w->workspaceID() != m_iID || !w->m_bIsMapped)
+            continue;
+        if (onlyTiled.has_value() && w->m_bIsFloating == onlyTiled.value())
+            continue;
+        if (onlyVisible.has_value() && w->isHidden() == onlyVisible.value())
+            continue;
+        no++;
+    }
+
+    return no;
+}
+
+int CWorkspace::getGroups(std::optional<bool> onlyTiled, std::optional<bool> onlyVisible) {
+    int no = 0;
+    for (auto const& w : g_pCompositor->m_vWindows) {
+        if (w->workspaceID() != m_iID || !w->m_bIsMapped)
+            continue;
+        if (!w->m_sGroupData.head)
+            continue;
+        if (onlyTiled.has_value() && w->m_bIsFloating == onlyTiled.value())
+            continue;
+        if (onlyVisible.has_value() && w->isHidden() == onlyVisible.value())
+            continue;
+        no++;
+    }
+    return no;
+}
+
+PHLWINDOW CWorkspace::getFirstWindow() {
+    for (auto const& w : g_pCompositor->m_vWindows) {
+        if (w->m_pWorkspace == m_pSelf && w->m_bIsMapped && !w->isHidden())
+            return w;
+    }
+
+    return nullptr;
+}
+
+PHLWINDOW CWorkspace::getTopLeftWindow() {
+    const auto PMONITOR = m_pMonitor.lock();
+
+    for (auto const& w : g_pCompositor->m_vWindows) {
+        if (w->m_pWorkspace != m_pSelf || !w->m_bIsMapped || w->isHidden())
+            continue;
+
+        const auto WINDOWIDEALBB = w->getWindowIdealBoundingBoxIgnoreReserved();
+
+        if (WINDOWIDEALBB.x <= PMONITOR->vecPosition.x + 1 && WINDOWIDEALBB.y <= PMONITOR->vecPosition.y + 1)
+            return w;
+    }
+    return nullptr;
+}
+
+bool CWorkspace::hasUrgentWindow() {
+    for (auto const& w : g_pCompositor->m_vWindows) {
+        if (w->m_pWorkspace == m_pSelf && w->m_bIsMapped && w->m_bIsUrgent)
+            return true;
+    }
+
+    return false;
+}
+
+void CWorkspace::updateWindowDecos() {
+    for (auto const& w : g_pCompositor->m_vWindows) {
+        if (w->m_pWorkspace != m_pSelf)
+            continue;
+
+        w->updateWindowDecos();
+    }
+}
+
+void CWorkspace::updateWindowData() {
+    const auto WORKSPACERULE = g_pConfigManager->getWorkspaceRuleFor(m_pSelf.lock());
+
+    for (auto const& w : g_pCompositor->m_vWindows) {
+        if (w->m_pWorkspace != m_pSelf)
+            continue;
+
+        w->updateWindowData(WORKSPACERULE);
+    }
+}
+
+void CWorkspace::forceReportSizesToWindows() {
+    for (auto const& w : g_pCompositor->m_vWindows) {
+        if (w->m_pWorkspace != m_pSelf || !w->m_bIsMapped || w->isHidden())
+            continue;
+
+        g_pXWaylandManager->setWindowSize(w, w->m_vRealSize.value(), true);
+    }
+}
+
+void CWorkspace::rename(const std::string& name) {
+    if (g_pCompositor->isWorkspaceSpecial(m_iID))
+        return;
+
+    Debug::log(LOG, "CWorkspace::rename: Renaming workspace {} to '{}'", m_iID, name);
+    m_szName = name;
+
+    g_pEventManager->postEvent({"renameworkspace", std::to_string(m_iID) + "," + m_szName});
+}
+
+void CWorkspace::updateWindows() {
+    m_bHasFullscreenWindow = std::ranges::any_of(g_pCompositor->m_vWindows, [this](const auto& w) { return w->m_bIsMapped && w->m_pWorkspace == m_pSelf && w->isFullscreen(); });
+
+    for (auto const& w : g_pCompositor->m_vWindows) {
+        if (!w->m_bIsMapped || w->m_pWorkspace != m_pSelf)
+            continue;
+
+        w->updateDynamicRules();
+    }
 }

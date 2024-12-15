@@ -8,7 +8,7 @@
 PHLLS CLayerSurface::create(SP<CLayerShellResource> resource) {
     PHLLS pLS = SP<CLayerSurface>(new CLayerSurface(resource));
 
-    auto  pMonitor = resource->monitor.empty() ? g_pCompositor->getMonitorFromCursor() : g_pCompositor->getMonitorFromName(resource->monitor);
+    auto  pMonitor = resource->monitor.empty() ? g_pCompositor->m_pLastMonitor.lock() : g_pCompositor->getMonitorFromName(resource->monitor);
 
     pLS->surface->assign(resource->surface.lock(), pLS);
 
@@ -400,7 +400,7 @@ void CLayerSurface::applyRules() {
         } else if (rule.rule.starts_with("xray")) {
             CVarList vars{rule.rule, 0, ' '};
             try {
-                xray = configStringToInt(vars[1]);
+                xray = configStringToInt(vars[1]).value_or(false);
             } catch (...) {}
         } else if (rule.rule.starts_with("animation")) {
             CVarList vars{rule.rule, 2, 's'};

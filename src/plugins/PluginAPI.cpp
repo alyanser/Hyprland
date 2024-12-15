@@ -71,7 +71,7 @@ APICALL bool HyprlandAPI::reloadConfig() {
     return true;
 }
 
-APICALL bool HyprlandAPI::addNotification(HANDLE handle, const std::string& text, const CColor& color, const float timeMs) {
+APICALL bool HyprlandAPI::addNotification(HANDLE handle, const std::string& text, const CHyprColor& color, const float timeMs) {
     auto* const PLUGIN = g_pPluginSystem->getPluginByHandle(handle);
 
     if (!PLUGIN)
@@ -244,7 +244,7 @@ APICALL bool addNotificationV2(HANDLE handle, const std::unordered_map<std::stri
         if (iterator == data.end())
             return false;
 
-        const auto COLOR = std::any_cast<CColor>(iterator->second);
+        const auto COLOR = std::any_cast<CHyprColor>(iterator->second);
 
         // optional
         eIcons icon = ICON_NONE;
@@ -320,7 +320,7 @@ APICALL std::vector<SFunctionMatch> HyprlandAPI::findFunctionsByName(HANDLE hand
     };
 
     if (SYMBOLS.empty()) {
-        Debug::log(ERR, "Unable to search for function \"{}\": no symbols found in binary (is \"{}\" in path?)", name,
+        Debug::log(ERR, R"(Unable to search for function "{}": no symbols found in binary (is "{}" in path?))", name,
 #ifdef __clang__
                    "llvm-nm"
 #else

@@ -81,7 +81,7 @@ void IHyprLayout::onWindowRemoved(PHLWINDOW pWindow) {
 }
 
 void IHyprLayout::onWindowRemovedFloating(PHLWINDOW pWindow) {
-    return; // no-op
+    ; // no-op
 }
 
 void IHyprLayout::onWindowCreatedFloating(PHLWINDOW pWindow) {
@@ -187,7 +187,7 @@ bool IHyprLayout::onWindowCreatedAutoGroup(PHLWINDOW pWindow) {
     static auto     PAUTOGROUP       = CConfigValue<Hyprlang::INT>("group:auto_group");
     const PHLWINDOW OPENINGON        = g_pCompositor->m_pLastWindow.lock() && g_pCompositor->m_pLastWindow->m_pWorkspace == pWindow->m_pWorkspace ?
                g_pCompositor->m_pLastWindow.lock() :
-               g_pCompositor->getFirstWindowOnWorkspace(pWindow->workspaceID());
+               (pWindow->m_pWorkspace ? pWindow->m_pWorkspace->getFirstWindow() : nullptr);
     const bool      FLOATEDINTOTILED = pWindow->m_bIsFloating && !OPENINGON->m_bIsFloating;
     const bool      SWALLOWING       = pWindow->m_pSwallowed || pWindow->m_bGroupSwallowed;
 
@@ -455,7 +455,7 @@ static void performSnap(Vector2D& sourcePos, Vector2D& sourceSize, PHLWINDOW DRA
 
             // corner snapping
             const double BORDERDIFF = OTHERBORDERSIZE - DRAGGINGBORDERSIZE;
-            if (sourceX.start == SURFBX.end || SURFBX.start == sourceX.end) {
+            if (snaps & (SNAP_LEFT | SNAP_RIGHT)) {
                 const SRange SURFY = {SURF.y - BORDERDIFF, SURF.y + SURF.h + BORDERDIFF};
                 if (CORNER & (CORNER_TOPLEFT | CORNER_TOPRIGHT) && canSnap(sourceY.start, SURFY.start, GAPSIZE)) {
                     SNAP(sourceY.start, sourceY.end, SURFY.start);
@@ -465,7 +465,7 @@ static void performSnap(Vector2D& sourcePos, Vector2D& sourceSize, PHLWINDOW DRA
                     snaps |= SNAP_DOWN;
                 }
             }
-            if (sourceY.start == SURFBY.end || SURFBY.start == sourceY.end) {
+            if (snaps & (SNAP_UP | SNAP_DOWN)) {
                 const SRange SURFX = {SURF.x - BORDERDIFF, SURF.x + SURF.w + BORDERDIFF};
                 if (CORNER & (CORNER_TOPLEFT | CORNER_BOTTOMLEFT) && canSnap(sourceX.start, SURFX.start, GAPSIZE)) {
                     SNAP(sourceX.start, sourceX.end, SURFX.start);
@@ -480,26 +480,35 @@ static void performSnap(Vector2D& sourcePos, Vector2D& sourceSize, PHLWINDOW DRA
 
     if (*SNAPMONITORGAP) {
         const double GAPSIZE    = *SNAPMONITORGAP;
-        const double BORDERSIZE = OVERLAP ? 0 : DRAGGINGBORDERSIZE;
-        const double BORDERDIFF = DRAGGINGBORDERSIZE - BORDERSIZE;
+        const double BORDERDIFF = OVERLAP ? DRAGGINGBORDERSIZE : 0;
         const auto   MON        = DRAGGINGWINDOW->m_pMonitor.lock();
 
-        SRange       monX = {MON->vecPosition.x + BORDERSIZE, MON->vecSize.x - BORDERSIZE};
-        SRange       monY = {MON->vecPosition.y + BORDERSIZE, MON->vecSize.y - BORDERSIZE};
+        SRange       monX = {MON->vecPosition.x + MON->vecReservedTopLeft.x + DRAGGINGBORDERSIZE,
+                             MON->vecPosition.x + MON->vecSize.x - MON->vecReservedBottomRight.x - DRAGGINGBORDERSIZE};
+        SRange       monY = {MON->vecPosition.y + MON->vecReservedTopLeft.y + DRAGGINGBORDERSIZE,
+                             MON->vecPosition.y + MON->vecSize.y - MON->vecReservedBottomRight.y - DRAGGINGBORDERSIZE};
 
-        if (canSnap(sourceX.start, monX.start, GAPSIZE) || canSnap(sourceX.start, (monX.start += MON->vecReservedTopLeft.x + BORDERDIFF), GAPSIZE)) {
+        if (CORNER & (CORNER_TOPLEFT | CORNER_BOTTOMLEFT) &&
+            ((MON->vecReservedTopLeft.x > 0 && canSnap(sourceX.start, monX.start, GAPSIZE)) ||
+             canSnap(sourceX.start, (monX.start -= MON->vecReservedTopLeft.x + BORDERDIFF), GAPSIZE))) {
             SNAP(sourceX.start, sourceX.end, monX.start);
             snaps |= SNAP_LEFT;
         }
-        if (canSnap(sourceX.end, monX.end, GAPSIZE) || canSnap(sourceX.end, (monX.end -= MON->vecReservedBottomRight.x + BORDERDIFF), GAPSIZE)) {
+        if (CORNER & (CORNER_TOPRIGHT | CORNER_BOTTOMRIGHT) &&
+            ((MON->vecReservedBottomRight.x > 0 && canSnap(sourceX.end, monX.end, GAPSIZE)) ||
+             canSnap(sourceX.end, (monX.end += MON->vecReservedBottomRight.x + BORDERDIFF), GAPSIZE))) {
             SNAP(sourceX.end, sourceX.start, monX.end);
             snaps |= SNAP_RIGHT;
         }
-        if (canSnap(sourceY.start, monY.start, GAPSIZE) || canSnap(sourceY.start, (monY.start += MON->vecReservedTopLeft.y + BORDERDIFF), GAPSIZE)) {
+        if (CORNER & (CORNER_TOPLEFT | CORNER_TOPRIGHT) &&
+            ((MON->vecReservedTopLeft.y > 0 && canSnap(sourceY.start, monY.start, GAPSIZE)) ||
+             canSnap(sourceY.start, (monY.start -= MON->vecReservedTopLeft.y + BORDERDIFF), GAPSIZE))) {
             SNAP(sourceY.start, sourceY.end, monY.start);
             snaps |= SNAP_UP;
         }
-        if (canSnap(sourceY.end, monY.end, GAPSIZE) || canSnap(sourceY.end, (monY.end -= MON->vecReservedBottomRight.y + BORDERDIFF), GAPSIZE)) {
+        if (CORNER & (CORNER_BOTTOMLEFT | CORNER_BOTTOMRIGHT) &&
+            ((MON->vecReservedBottomRight.y > 0 && canSnap(sourceY.end, monY.end, GAPSIZE)) ||
+             canSnap(sourceY.end, (monY.end += MON->vecReservedBottomRight.y + BORDERDIFF), GAPSIZE))) {
             SNAP(sourceY.end, sourceY.start, monY.end);
             snaps |= SNAP_DOWN;
         }
@@ -597,12 +606,12 @@ void IHyprLayout::onMouseMove(const Vector2D& mousePos) {
     } else if (g_pInputManager->dragMode == MBIND_RESIZE || g_pInputManager->dragMode == MBIND_RESIZE_FORCE_RATIO || g_pInputManager->dragMode == MBIND_RESIZE_BLOCK_RATIO) {
         if (DRAGGINGWINDOW->m_bIsFloating) {
 
-            Vector2D MINSIZE = g_pXWaylandManager->getMinSizeForWindow(DRAGGINGWINDOW).clamp(DRAGGINGWINDOW->m_sWindowData.minSize.valueOr(Vector2D(20, 20)));
+            Vector2D MINSIZE = DRAGGINGWINDOW->requestedMinSize().clamp(DRAGGINGWINDOW->m_sWindowData.minSize.valueOr(Vector2D(20, 20)));
             Vector2D MAXSIZE;
             if (DRAGGINGWINDOW->m_sWindowData.maxSize.hasValue())
-                MAXSIZE = g_pXWaylandManager->getMaxSizeForWindow(DRAGGINGWINDOW).clamp({}, DRAGGINGWINDOW->m_sWindowData.maxSize.value());
+                MAXSIZE = DRAGGINGWINDOW->requestedMaxSize().clamp({}, DRAGGINGWINDOW->m_sWindowData.maxSize.value());
             else
-                MAXSIZE = g_pXWaylandManager->getMaxSizeForWindow(DRAGGINGWINDOW).clamp({}, Vector2D(std::numeric_limits<double>::max(), std::numeric_limits<double>::max()));
+                MAXSIZE = DRAGGINGWINDOW->requestedMaxSize().clamp({}, Vector2D(std::numeric_limits<double>::max(), std::numeric_limits<double>::max()));
 
             Vector2D newSize = m_vBeginDragSizeXY;
             Vector2D newPos  = m_vBeginDragPositionXY;
@@ -714,7 +723,7 @@ void IHyprLayout::changeWindowFloatingMode(PHLWINDOW pWindow) {
         const auto PWORKSPACE = PNEWMON->activeSpecialWorkspace ? PNEWMON->activeSpecialWorkspace : PNEWMON->activeWorkspace;
 
         if (PWORKSPACE->m_bHasFullscreenWindow)
-            g_pCompositor->setWindowFullscreenInternal(g_pCompositor->getFullscreenWindowOnWorkspace(PWORKSPACE->m_iID), FSMODE_NONE);
+            g_pCompositor->setWindowFullscreenInternal(PWORKSPACE->getFullscreenWindow(), FSMODE_NONE);
 
         // save real pos cuz the func applies the default 5,5 mid
         const auto PSAVEDPOS  = pWindow->m_vRealPosition.goal();
@@ -803,7 +812,7 @@ PHLWINDOW IHyprLayout::getNextWindowCandidate(PHLWINDOW pWindow) {
 
     // first of all, if this is a fullscreen workspace,
     if (PWORKSPACE->m_bHasFullscreenWindow)
-        return g_pCompositor->getFullscreenWindowOnWorkspace(pWindow->workspaceID());
+        return PWORKSPACE->getFullscreenWindow();
 
     if (pWindow->m_bIsFloating) {
 
@@ -842,10 +851,10 @@ PHLWINDOW IHyprLayout::getNextWindowCandidate(PHLWINDOW pWindow) {
     auto pWindowCandidate = g_pCompositor->vectorToWindowUnified(pWindow->middle(), RESERVED_EXTENTS | INPUT_EXTENTS | ALLOW_FLOATING);
 
     if (!pWindowCandidate)
-        pWindowCandidate = g_pCompositor->getTopLeftWindowOnWorkspace(pWindow->workspaceID());
+        pWindowCandidate = PWORKSPACE->getTopLeftWindow();
 
     if (!pWindowCandidate)
-        pWindowCandidate = g_pCompositor->getFirstWindowOnWorkspace(pWindow->workspaceID());
+        pWindowCandidate = PWORKSPACE->getFirstWindow();
 
     if (!pWindowCandidate || pWindow == pWindowCandidate || !pWindowCandidate->m_bIsMapped || pWindowCandidate->isHidden() || pWindowCandidate->m_bX11ShouldntFocus ||
         pWindowCandidate->isX11OverrideRedirect() || pWindowCandidate->m_pMonitor != g_pCompositor->m_pLastMonitor)
@@ -884,7 +893,7 @@ Vector2D IHyprLayout::predictSizeForNewWindowFloating(PHLWINDOW pWindow) { // ge
                     const auto  SIZEXSTR = VALUE.substr(0, VALUE.find(' '));
                     const auto  SIZEYSTR = VALUE.substr(VALUE.find(' ') + 1);
 
-                    const auto  MAXSIZE = g_pXWaylandManager->getMaxSizeForWindow(pWindow);
+                    const auto  MAXSIZE = pWindow->requestedMaxSize();
 
                     const float SIZEX = SIZEXSTR == "max" ? std::clamp(MAXSIZE.x, MIN_WINDOW_SIZE, g_pCompositor->m_pLastMonitor->vecSize.x) :
                                                             stringToPercentage(SIZEXSTR, g_pCompositor->m_pLastMonitor->vecSize.x);
@@ -930,4 +939,4 @@ Vector2D IHyprLayout::predictSizeForNewWindow(PHLWINDOW pWindow) {
     return sizePredicted;
 }
 
-IHyprLayout::~IHyprLayout() {}
+IHyprLayout::~IHyprLayout() = default;

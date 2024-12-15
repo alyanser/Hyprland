@@ -14,8 +14,7 @@ CSeatManager::CSeatManager() {
     listeners.newSeatResource = PROTO::seat->events.newSeatResource.registerListener([this](std::any res) { onNewSeatResource(std::any_cast<SP<CWLSeatResource>>(res)); });
 }
 
-CSeatManager::SSeatResourceContainer::SSeatResourceContainer(SP<CWLSeatResource> res) {
-    resource          = res;
+CSeatManager::SSeatResourceContainer::SSeatResourceContainer(SP<CWLSeatResource> res) : resource(res) {
     listeners.destroy = res->events.destroy.registerListener(
         [this](std::any data) { std::erase_if(g_pSeatManager->seatResources, [this](const auto& e) { return e->resource.expired() || e->resource == resource; }); });
 }
@@ -192,8 +191,12 @@ void CSeatManager::setPointerFocus(SP<CWLSurfaceResource> surf, const Vector2D& 
     if (state.pointerFocus == surf)
         return;
 
-    if (PROTO::data->dndActive() && surf) {
-        Debug::log(LOG, "[seatmgr] Refusing pointer focus during an active dnd");
+    if (PROTO::data->dndActive()) {
+        if (state.dndPointerFocus == surf)
+            return;
+        Debug::log(LOG, "[seatmgr] Refusing pointer focus during an active dnd, but setting dndPointerFocus");
+        state.dndPointerFocus = surf;
+        events.dndPointerFocusChange.emit();
         return;
     }
 
@@ -221,6 +224,7 @@ void CSeatManager::setPointerFocus(SP<CWLSurfaceResource> surf, const Vector2D& 
 
     auto lastPointerFocusResource = state.pointerFocusResource;
 
+    state.dndPointerFocus.reset();
     state.pointerFocusResource.reset();
     state.pointerFocus = surf;
 
@@ -229,6 +233,8 @@ void CSeatManager::setPointerFocus(SP<CWLSurfaceResource> surf, const Vector2D& 
         events.pointerFocusChange.emit();
         return;
     }
+
+    state.dndPointerFocus = surf;
 
     auto client = surf->client();
     for (auto const& r : seatResources | std::views::reverse) {
@@ -252,6 +258,7 @@ void CSeatManager::setPointerFocus(SP<CWLSurfaceResource> surf, const Vector2D& 
     listeners.pointerSurfaceDestroy = surf->events.destroy.registerListener([this](std::any d) { setPointerFocus(nullptr, {}); });
 
     events.pointerFocusChange.emit();
+    events.dndPointerFocusChange.emit();
 }
 
 void CSeatManager::sendPointerMotion(uint32_t timeMs, const Vector2D& local) {
@@ -332,8 +339,10 @@ void CSeatManager::sendPointerAxis(uint32_t timeMs, wl_pointer_axis axis, double
             p->sendAxisRelativeDirection(axis, relative);
 
             if (source == 0) {
-                p->sendAxisValue120(axis, value120);
-                p->sendAxisDiscrete(axis, discrete);
+                if (p->version() >= 8)
+                    p->sendAxisValue120(axis, value120);
+                else
+                    p->sendAxisDiscrete(axis, discrete);
             } else if (value == 0)
                 p->sendAxisStop(timeMs, axis);
         }
@@ -645,7 +654,7 @@ bool CSeatGrab::accepts(SP<CWLSurfaceResource> surf) {
 }
 
 void CSeatGrab::add(SP<CWLSurfaceResource> surf) {
-    surfs.push_back(surf);
+    surfs.emplace_back(surf);
 }
 
 void CSeatGrab::remove(SP<CWLSurfaceResource> surf) {

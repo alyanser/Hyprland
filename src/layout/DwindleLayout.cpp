@@ -12,9 +12,9 @@ void SDwindleNodeData::recalcSizePosRecursive(bool force, bool horizontalOverrid
         if (*PPRESERVESPLIT == 0 && *PSMARTSPLIT == 0)
             splitTop = box.h * *PFLMULT > box.w;
 
-        if (verticalOverride == true)
+        if (verticalOverride)
             splitTop = true;
-        else if (horizontalOverride == true)
+        else if (horizontalOverride)
             splitTop = false;
 
         const auto SPLITSIDE = !splitTop;
@@ -231,7 +231,7 @@ void CHyprDwindleLayout::onWindowCreatedTiling(PHLWINDOW pWindow, eDirection dir
     if (pWindow->m_bIsFloating)
         return;
 
-    m_lDwindleNodesData.push_back(SDwindleNodeData());
+    m_lDwindleNodesData.emplace_back();
     const auto  PNODE = &m_lDwindleNodesData.back();
 
     const auto  PMONITOR = pWindow->m_pMonitor.lock();
@@ -283,7 +283,7 @@ void CHyprDwindleLayout::onWindowCreatedTiling(PHLWINDOW pWindow, eDirection dir
 
     // first, check if OPENINGON isn't too big.
     const auto PREDSIZEMAX = OPENINGON ? Vector2D(OPENINGON->box.w, OPENINGON->box.h) : PMONITOR->vecSize;
-    if (const auto MAXSIZE = g_pXWaylandManager->getMaxSizeForWindow(pWindow); MAXSIZE.x < PREDSIZEMAX.x || MAXSIZE.y < PREDSIZEMAX.y) {
+    if (const auto MAXSIZE = pWindow->requestedMaxSize(); MAXSIZE.x < PREDSIZEMAX.x || MAXSIZE.y < PREDSIZEMAX.y) {
         // we can't continue. make it floating.
         pWindow->m_bIsFloating = true;
         m_lDwindleNodesData.remove(*PNODE);
@@ -312,7 +312,7 @@ void CHyprDwindleLayout::onWindowCreatedTiling(PHLWINDOW pWindow, eDirection dir
 
     // get the node under our cursor
 
-    m_lDwindleNodesData.push_back(SDwindleNodeData());
+    m_lDwindleNodesData.emplace_back();
     const auto NEWPARENT = &m_lDwindleNodesData.back();
 
     // make the parent have the OPENINGON's stats
@@ -514,7 +514,7 @@ void CHyprDwindleLayout::calculateWorkspace(const PHLWORKSPACE& pWorkspace) {
 
     if (pWorkspace->m_bHasFullscreenWindow) {
         // massive hack from the fullscreen func
-        const auto PFULLWINDOW = g_pCompositor->getFullscreenWindowOnWorkspace(pWorkspace->m_iID);
+        const auto PFULLWINDOW = pWorkspace->getFullscreenWindow();
 
         if (pWorkspace->m_efFullscreenMode == FSMODE_FULLSCREEN) {
             PFULLWINDOW->m_vRealPosition = PMONITOR->vecPosition;
@@ -1054,7 +1054,7 @@ void CHyprDwindleLayout::moveToRoot(PHLWINDOW pWindow, bool stable) {
         std::swap(pRoot->children[0], pRoot->children[1]);
 
     // if the workspace is visible, recalculate layout
-    if (g_pCompositor->isWorkspaceVisible(pWindow->m_pWorkspace))
+    if (pWindow->m_pWorkspace && pWindow->m_pWorkspace->isVisible())
         pRoot->recalcSizePosRecursive();
 }
 
@@ -1094,7 +1094,7 @@ Vector2D CHyprDwindleLayout::predictSizeForNewWindowTiled() {
     PHLWINDOW candidate = g_pCompositor->m_pLastWindow.lock();
 
     if (!candidate)
-        candidate = g_pCompositor->getFirstWindowOnWorkspace(g_pCompositor->m_pLastMonitor->activeWorkspace->m_iID);
+        candidate = g_pCompositor->m_pLastMonitor->activeWorkspace->getFirstWindow();
 
     // create a fake node
     SDwindleNodeData node;

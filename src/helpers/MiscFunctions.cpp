@@ -6,6 +6,7 @@
 #include <optional>
 #include <cstring>
 #include <cmath>
+#include <filesystem>
 #include <set>
 #include <sys/utsname.h>
 #include <sys/mman.h>
@@ -263,7 +264,7 @@ SWorkspaceIDName getWorkspaceIDNameFromString(const std::string& in) {
         WORKSPACEID id = next ? g_pCompositor->m_pLastMonitor->activeWorkspaceID() : 0;
         while (++id < LONG_MAX) {
             const auto PWORKSPACE = g_pCompositor->getWorkspaceByID(id);
-            if (!invalidWSes.contains(id) && (!PWORKSPACE || g_pCompositor->getWindowsOnWorkspace(id) == 0)) {
+            if (!invalidWSes.contains(id) && (!PWORKSPACE || PWORKSPACE->getWindows() == 0)) {
                 result.id = id;
                 return result;
             }
@@ -606,9 +607,26 @@ void logSystemInfo() {
     Debug::log(NONE, "\n");
 
 #if defined(__DragonFly__) || defined(__FreeBSD__)
-    const std::string GPUINFO = execAndGet("pciconf -lv | fgrep -A4 vga");
+    const std::string GPUINFO = execAndGet("pciconf -lv | grep -F -A4 vga");
 #elif defined(__arm__) || defined(__aarch64__)
-    const std::string GPUINFO = execAndGet("cat /proc/device-tree/soc*/gpu*/compatible");
+    std::string                 GPUINFO;
+    const std::filesystem::path dev_tree = "/proc/device-tree";
+    try {
+        if (std::filesystem::exists(dev_tree) && std::filesystem::is_directory(dev_tree)) {
+            std::for_each(std::filesystem::directory_iterator(dev_tree), std::filesystem::directory_iterator{}, [&](const std::filesystem::directory_entry& entry) {
+                if (std::filesystem::is_directory(entry) && entry.path().filename().string().starts_with("soc")) {
+                    std::for_each(std::filesystem::directory_iterator(entry.path()), std::filesystem::directory_iterator{}, [&](const std::filesystem::directory_entry& sub_entry) {
+                        if (std::filesystem::is_directory(sub_entry) && sub_entry.path().filename().string().starts_with("gpu")) {
+                            std::filesystem::path file_path = sub_entry.path() / "compatible";
+                            std::ifstream         file(file_path);
+                            if (file)
+                                GPUINFO.append(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+                        }
+                    });
+                }
+            });
+        }
+    } catch (...) { GPUINFO = "error"; }
 #else
     const std::string GPUINFO = execAndGet("lspci -vnn | grep VGA");
 #endif
@@ -673,44 +691,91 @@ int64_t getPPIDof(int64_t pid) {
 #endif
 }
 
-int64_t configStringToInt(const std::string& VALUE) {
+std::expected<int64_t, std::string> configStringToInt(const std::string& VALUE) {
+    auto parseHex = [](const std::string& value) -> std::expected<int64_t, std::string> {
+        try {
+            size_t position;
+            auto   result = stoll(value, &position, 16);
+            if (position == value.size())
+                return result;
+        } catch (const std::exception&) {}
+        return std::unexpected("invalid hex " + value);
+    };
     if (VALUE.starts_with("0x")) {
         // Values with 0x are hex
-        const auto VALUEWITHOUTHEX = VALUE.substr(2);
-        return stol(VALUEWITHOUTHEX, nullptr, 16);
+        return parseHex(VALUE);
     } else if (VALUE.starts_with("rgba(") && VALUE.ends_with(')')) {
-        const auto VALUEWITHOUTFUNC = VALUE.substr(5, VALUE.length() - 6);
+        const auto VALUEWITHOUTFUNC = trim(VALUE.substr(5, VALUE.length() - 6));
 
-        if (trim(VALUEWITHOUTFUNC).length() != 8) {
-            Debug::log(WARN, "invalid length {} for rgba", VALUEWITHOUTFUNC.length());
-            throw std::invalid_argument("rgba() expects length of 8 characters (4 bytes)");
+        // try doing it the comma way first
+        if (std::count(VALUEWITHOUTFUNC.begin(), VALUEWITHOUTFUNC.end(), ',') == 3) {
+            // cool
+            std::string rolling = VALUEWITHOUTFUNC;
+            auto        r       = configStringToInt(trim(rolling.substr(0, rolling.find(','))));
+            rolling             = rolling.substr(rolling.find(',') + 1);
+            auto g              = configStringToInt(trim(rolling.substr(0, rolling.find(','))));
+            rolling             = rolling.substr(rolling.find(',') + 1);
+            auto b              = configStringToInt(trim(rolling.substr(0, rolling.find(','))));
+            rolling             = rolling.substr(rolling.find(',') + 1);
+            uint8_t a           = 0;
+
+            if (!r || !g || !b)
+                return std::unexpected("failed parsing " + VALUEWITHOUTFUNC);
+
+            try {
+                a = std::round(std::stof(trim(rolling.substr(0, rolling.find(',')))) * 255.f);
+            } catch (std::exception& e) { return std::unexpected("failed parsing " + VALUEWITHOUTFUNC); }
+
+            return a * (Hyprlang::INT)0x1000000 + *r * (Hyprlang::INT)0x10000 + *g * (Hyprlang::INT)0x100 + *b;
+        } else if (VALUEWITHOUTFUNC.length() == 8) {
+            const auto RGBA = parseHex(VALUEWITHOUTFUNC);
+
+            if (!RGBA)
+                return RGBA;
+            // now we need to RGBA -> ARGB. The config holds ARGB only.
+            return (*RGBA >> 8) + 0x1000000 * (*RGBA & 0xFF);
         }
 
-        const auto RGBA = std::stol(VALUEWITHOUTFUNC, nullptr, 16);
+        return std::unexpected("rgba() expects length of 8 characters (4 bytes) or 4 comma separated values");
 
-        // now we need to RGBA -> ARGB. The config holds ARGB only.
-        return (RGBA >> 8) + 0x1000000 * (RGBA & 0xFF);
     } else if (VALUE.starts_with("rgb(") && VALUE.ends_with(')')) {
-        const auto VALUEWITHOUTFUNC = VALUE.substr(4, VALUE.length() - 5);
+        const auto VALUEWITHOUTFUNC = trim(VALUE.substr(4, VALUE.length() - 5));
 
-        if (trim(VALUEWITHOUTFUNC).length() != 6) {
-            Debug::log(WARN, "invalid length {} for rgb", VALUEWITHOUTFUNC.length());
-            throw std::invalid_argument("rgb() expects length of 6 characters (3 bytes)");
+        // try doing it the comma way first
+        if (std::count(VALUEWITHOUTFUNC.begin(), VALUEWITHOUTFUNC.end(), ',') == 2) {
+            // cool
+            std::string rolling = VALUEWITHOUTFUNC;
+            auto        r       = configStringToInt(trim(rolling.substr(0, rolling.find(','))));
+            rolling             = rolling.substr(rolling.find(',') + 1);
+            auto g              = configStringToInt(trim(rolling.substr(0, rolling.find(','))));
+            rolling             = rolling.substr(rolling.find(',') + 1);
+            auto b              = configStringToInt(trim(rolling.substr(0, rolling.find(','))));
+
+            if (!r || !g || !b)
+                return std::unexpected("failed parsing " + VALUEWITHOUTFUNC);
+
+            return (Hyprlang::INT)0xFF000000 + *r * (Hyprlang::INT)0x10000 + *g * (Hyprlang::INT)0x100 + *b;
+        } else if (VALUEWITHOUTFUNC.length() == 6) {
+            auto r = parseHex(VALUEWITHOUTFUNC);
+            return r ? *r + 0xFF000000 : r;
         }
 
-        const auto RGB = std::stol(VALUEWITHOUTFUNC, nullptr, 16);
-
-        return RGB + 0xFF000000; // 0xFF for opaque
+        return std::unexpected("rgb() expects length of 6 characters (3 bytes) or 3 comma separated values");
     } else if (VALUE.starts_with("true") || VALUE.starts_with("on") || VALUE.starts_with("yes")) {
         return 1;
     } else if (VALUE.starts_with("false") || VALUE.starts_with("off") || VALUE.starts_with("no")) {
         return 0;
     }
 
-    if (VALUE.empty() || !isNumber(VALUE))
-        return 0;
+    if (VALUE.empty() || !isNumber(VALUE, false))
+        return std::unexpected("cannot parse \"" + VALUE + "\" as an int.");
 
-    return std::stoll(VALUE);
+    try {
+        const auto RES = std::stoll(VALUE);
+        return RES;
+    } catch (std::exception& e) { return std::unexpected(std::string{"stoll threw: "} + e.what()); }
+
+    return std::unexpected("parse error");
 }
 
 Vector2D configStringToVector2D(const std::string& VALUE) {
@@ -865,4 +930,31 @@ float stringToPercentage(const std::string& VALUE, const float REL) {
         return (std::stof(VALUE.substr(0, VALUE.length() - 1)) * REL) / 100.f;
     else
         return std::stof(VALUE);
-};
+}
+
+bool executableExistsInPath(const std::string& exe) {
+    if (!getenv("PATH"))
+        return false;
+
+    static CVarList paths(getenv("PATH"), 0, ':', true);
+
+    for (auto& p : paths) {
+        std::string     path = p + std::string{"/"} + exe;
+        std::error_code ec;
+        if (!std::filesystem::exists(path, ec) || ec)
+            continue;
+
+        if (!std::filesystem::is_regular_file(path, ec) || ec)
+            continue;
+
+        auto stat = std::filesystem::status(path, ec);
+        if (ec)
+            continue;
+
+        auto perms = stat.permissions();
+
+        return std::filesystem::perms::none != (perms & std::filesystem::perms::others_exec);
+    }
+
+    return false;
+}

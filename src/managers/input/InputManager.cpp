@@ -294,7 +294,7 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus) {
     const auto PWORKSPACE   = PMONITOR->activeWorkspace;
     const auto PWINDOWIDEAL = g_pCompositor->vectorToWindowUnified(mouseCoords, RESERVED_EXTENTS | INPUT_EXTENTS | ALLOW_FLOATING);
     if (PWORKSPACE->m_bHasFullscreenWindow && !foundSurface && PWORKSPACE->m_efFullscreenMode == FSMODE_FULLSCREEN) {
-        pFoundWindow = g_pCompositor->getFullscreenWindowOnWorkspace(PWORKSPACE->m_iID);
+        pFoundWindow = PWORKSPACE->getFullscreenWindow();
 
         if (!pFoundWindow) {
             // what the fuck, somehow happens occasionally??
@@ -325,7 +325,7 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus) {
                         pFoundWindow = g_pCompositor->vectorToWindowUnified(mouseCoords, RESERVED_EXTENTS | INPUT_EXTENTS | ALLOW_FLOATING);
 
                     if (pFoundWindow && !pFoundWindow->onSpecialWorkspace()) {
-                        pFoundWindow = g_pCompositor->getFullscreenWindowOnWorkspace(PWORKSPACE->m_iID);
+                        pFoundWindow = PWORKSPACE->getFullscreenWindow();
                     }
                 } else {
                     // if we have a maximized window, allow focusing on a bar or something if in reserved area.
@@ -339,7 +339,7 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus) {
                             pFoundWindow = g_pCompositor->vectorToWindowUnified(mouseCoords, RESERVED_EXTENTS | INPUT_EXTENTS | ALLOW_FLOATING);
 
                         if (!(pFoundWindow && pFoundWindow->m_bIsFloating && pFoundWindow->m_bCreatedOverFullscreen))
-                            pFoundWindow = g_pCompositor->getFullscreenWindowOnWorkspace(PWORKSPACE->m_iID);
+                            pFoundWindow = PWORKSPACE->getFullscreenWindow();
                     }
                 }
             }
@@ -374,8 +374,9 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus) {
     if (g_pPointerManager->softwareLockedFor(PMONITOR->self.lock()) > 0 && !skipFrameSchedule)
         g_pCompositor->scheduleFrameForMonitor(g_pCompositor->m_pLastMonitor.lock(), Aquamarine::IOutput::AQ_SCHEDULE_CURSOR_MOVE);
 
-    // grabs
-    if (g_pSeatManager->seatGrab && !g_pSeatManager->seatGrab->accepts(foundSurface)) {
+    // FIXME: This will be disabled during DnD operations because we do not exactly follow the spec
+    // xdg-popup grabs should be keyboard-only, while they are absolute in our case...
+    if (g_pSeatManager->seatGrab && !g_pSeatManager->seatGrab->accepts(foundSurface) && !PROTO::data->dndActive()) {
         if (m_bHardInput || refocus) {
             g_pSeatManager->setGrab(nullptr);
             return; // setGrab will refocus
@@ -761,7 +762,8 @@ void CInputManager::onMouseWheel(IPointer::SAxisEvent e) {
     static auto PEMULATEDISCRETE      = CConfigValue<Hyprlang::INT>("input:emulate_discrete_scroll");
     static auto PFOLLOWMOUSE          = CConfigValue<Hyprlang::INT>("input:follow_mouse");
 
-    auto        factor = (*PTOUCHPADSCROLLFACTOR <= 0.f || e.source == WL_POINTER_AXIS_SOURCE_FINGER ? *PTOUCHPADSCROLLFACTOR : *PINPUTSCROLLFACTOR);
+    const bool  ISTOUCHPADSCROLL = *PTOUCHPADSCROLLFACTOR <= 0.f || e.source == WL_POINTER_AXIS_SOURCE_FINGER;
+    auto        factor           = ISTOUCHPADSCROLL ? *PTOUCHPADSCROLLFACTOR : *PINPUTSCROLLFACTOR;
 
     const auto  EMAP = std::unordered_map<std::string, std::any>{{"event", e}};
     EMIT_HOOK_EVENT_CANCELLABLE("mouseAxis", EMAP);
@@ -803,6 +805,7 @@ void CInputManager::onMouseWheel(IPointer::SAxisEvent e) {
                 if (*PFOLLOWMOUSE == 1 && PCURRWINDOW && PWINDOW != PCURRWINDOW)
                     simulateMouseMovement();
             }
+            factor = ISTOUCHPADSCROLL ? PWINDOW->getScrollTouchpad() : PWINDOW->getScrollMouse();
         }
     }
 
@@ -868,7 +871,7 @@ void CInputManager::newVirtualKeyboard(SP<CVirtualKeyboardV1Resource> keyboard) 
 void CInputManager::setupKeyboard(SP<IKeyboard> keeb) {
     static auto PDPMS = CConfigValue<Hyprlang::INT>("misc:key_press_enables_dpms");
 
-    m_vHIDs.push_back(keeb);
+    m_vHIDs.emplace_back(keeb);
 
     try {
         keeb->hlName = getNameForNewDevice(keeb->deviceName);
@@ -1016,7 +1019,7 @@ void CInputManager::newMouse(SP<Aquamarine::IPointer> mouse) {
 }
 
 void CInputManager::setupMouse(SP<IPointer> mauz) {
-    m_vHIDs.push_back(mauz);
+    m_vHIDs.emplace_back(mauz);
 
     try {
         mauz->hlName = getNameForNewDevice(mauz->deviceName);
@@ -1402,7 +1405,7 @@ void CInputManager::refocusLastWindow(PHLMONITOR pMonitor) {
             foundSurface = nullptr;
     }
 
-    if (!foundSurface && g_pCompositor->m_pLastWindow.lock() && g_pCompositor->isWorkspaceVisibleNotCovered(g_pCompositor->m_pLastWindow->m_pWorkspace)) {
+    if (!foundSurface && g_pCompositor->m_pLastWindow.lock() && g_pCompositor->m_pLastWindow->m_pWorkspace && g_pCompositor->m_pLastWindow->m_pWorkspace->isVisibleNotCovered()) {
         // then the last focused window if we're on the same workspace as it
         const auto PLASTWINDOW = g_pCompositor->m_pLastWindow.lock();
         g_pCompositor->focusWindow(PLASTWINDOW);
@@ -1495,7 +1498,7 @@ void CInputManager::disableAllKeyboards(bool virt) {
 
 void CInputManager::newTouchDevice(SP<Aquamarine::ITouch> pDevice) {
     const auto PNEWDEV = m_vTouches.emplace_back(CTouchDevice::create(pDevice));
-    m_vHIDs.push_back(PNEWDEV);
+    m_vHIDs.emplace_back(PNEWDEV);
 
     try {
         PNEWDEV->hlName = getNameForNewDevice(PNEWDEV->deviceName);

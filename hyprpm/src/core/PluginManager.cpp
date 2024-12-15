@@ -38,17 +38,38 @@ static std::string execAndGet(std::string cmd) {
     return proc.stdOut();
 }
 
-SHyprlandVersion CPluginManager::getHyprlandVersion() {
-    static SHyprlandVersion ver;
-    static bool             once = false;
+static std::string getTempRoot() {
+    static auto ENV = getenv("XDG_RUNTIME_DIR");
+    if (!ENV) {
+        std::cerr << "\nERROR: XDG_RUNTIME_DIR not set!\n";
+        exit(1);
+    }
 
-    if (once)
-        return ver;
+    const auto STR = ENV + std::string{"/hyprpm/"};
 
-    once                 = true;
-    const auto HLVERCALL = execAndGet("hyprctl version");
+    return STR;
+}
+
+SHyprlandVersion CPluginManager::getHyprlandVersion(bool running) {
+    static bool             onceRunning   = false;
+    static bool             onceInstalled = false;
+    static SHyprlandVersion verRunning;
+    static SHyprlandVersion verInstalled;
+
+    if (onceRunning && running)
+        return verRunning;
+
+    if (onceInstalled && !running)
+        return verInstalled;
+
+    if (running)
+        onceRunning = true;
+    else
+        onceInstalled = true;
+
+    const auto HLVERCALL = running ? execAndGet("hyprctl version") : execAndGet("Hyprland --version");
     if (m_bVerbose)
-        std::println("{}", verboseString("version returned: {}", HLVERCALL));
+        std::println("{}", verboseString("{} version returned: {}", running ? "running" : "installed", HLVERCALL));
 
     if (!HLVERCALL.contains("Tag:")) {
         std::println(stderr, "\n{}", failureString("You don't seem to be running Hyprland."));
@@ -79,12 +100,18 @@ SHyprlandVersion CPluginManager::getHyprlandVersion() {
     if (m_bVerbose)
         std::println("{}", verboseString("parsed commit {} at branch {} on {}, commits {}", hlcommit, hlbranch, hldate, commits));
 
-    ver = SHyprlandVersion{hlbranch, hlcommit, hldate, commits};
+    auto ver = SHyprlandVersion{hlbranch, hlcommit, hldate, commits};
+
+    if (running)
+        verRunning = ver;
+    else
+        verInstalled = ver;
+
     return ver;
 }
 
 bool CPluginManager::createSafeDirectory(const std::string& path) {
-    if (path.empty() || !path.starts_with("/tmp"))
+    if (path.empty() || !path.starts_with(getTempRoot()))
         return false;
 
     if (std::filesystem::exists(path))
@@ -103,7 +130,7 @@ bool CPluginManager::addNewPluginRepo(const std::string& url, const std::string&
     const auto HLVER = getHyprlandVersion();
 
     if (!hasDeps()) {
-        std::println(stderr, "\n{}", failureString("Could not clone the plugin repository. Dependencies not satisfied. Hyprpm requires: cmake, meson, cpio"));
+        std::println(stderr, "\n{}", failureString("Could not clone the plugin repository. Dependencies not satisfied. Hyprpm requires: cmake, meson, cpio, pkg-config"));
         return false;
     }
 
@@ -142,17 +169,17 @@ bool CPluginManager::addNewPluginRepo(const std::string& url, const std::string&
 
     progress.print();
 
-    if (!std::filesystem::exists("/tmp/hyprpm")) {
-        std::filesystem::create_directory("/tmp/hyprpm");
-        std::filesystem::permissions("/tmp/hyprpm", std::filesystem::perms::all, std::filesystem::perm_options::replace);
-    } else if (!std::filesystem::is_directory("/tmp/hyprpm")) {
+    if (!std::filesystem::exists(getTempRoot())) {
+        std::filesystem::create_directory(getTempRoot());
+        std::filesystem::permissions(getTempRoot(), std::filesystem::perms::owner_all, std::filesystem::perm_options::replace);
+    } else if (!std::filesystem::is_directory(getTempRoot())) {
         std::println(stderr, "\n{}", failureString("Could not prepare working dir for hyprpm"));
         return false;
     }
 
     const std::string USERNAME = getpwuid(getuid())->pw_name;
 
-    m_szWorkingPluginDirectory = "/tmp/hyprpm/" + USERNAME;
+    m_szWorkingPluginDirectory = getTempRoot() + USERNAME;
 
     if (!createSafeDirectory(m_szWorkingPluginDirectory)) {
         std::println(stderr, "\n{}", failureString("Could not prepare working dir for repo"));
@@ -161,7 +188,7 @@ bool CPluginManager::addNewPluginRepo(const std::string& url, const std::string&
 
     progress.printMessageAbove(infoString("Cloning {}", url));
 
-    std::string ret = execAndGet("cd /tmp/hyprpm && git clone --recursive " + url + " " + USERNAME);
+    std::string ret = execAndGet(std::format("cd {} && git clone --recursive {} {}", getTempRoot(), url, USERNAME));
 
     if (!std::filesystem::exists(m_szWorkingPluginDirectory + "/.git")) {
         std::println(stderr, "\n{}", failureString("Could not clone the plugin repository. shell returned:\n{}", ret));
@@ -272,7 +299,7 @@ bool CPluginManager::addNewPluginRepo(const std::string& url, const std::string&
         }
 
         if (m_bVerbose)
-            std::println("{}", verboseString("shell returned: " + out));
+            std::println("{}", verboseString("shell returned: {}", out));
 
         if (!std::filesystem::exists(m_szWorkingPluginDirectory + "/" + p.output)) {
             progress.printMessageAbove(failureString("Plugin {} failed to build.\n"
@@ -344,7 +371,7 @@ bool CPluginManager::removePluginRepo(const std::string& urlOrName) {
 }
 
 eHeadersErrors CPluginManager::headersValid() {
-    const auto HLVER = getHyprlandVersion();
+    const auto HLVER = getHyprlandVersion(false);
 
     if (!std::filesystem::exists(DataState::getHeadersPath() + "/share/pkgconfig/hyprland.pc"))
         return HEADERS_MISSING;
@@ -406,16 +433,16 @@ bool CPluginManager::updateHeaders(bool force) {
 
     DataState::ensureStateStoreExists();
 
-    const auto HLVER = getHyprlandVersion();
+    const auto HLVER = getHyprlandVersion(false);
 
     if (!hasDeps()) {
-        std::println("\n{}", failureString("Could not update. Dependencies not satisfied. Hyprpm requires: cmake, meson, cpio"));
+        std::println("\n{}", failureString("Could not update. Dependencies not satisfied. Hyprpm requires: cmake, meson, cpio, pkg-config"));
         return false;
     }
 
-    if (!std::filesystem::exists("/tmp/hyprpm")) {
-        std::filesystem::create_directory("/tmp/hyprpm");
-        std::filesystem::permissions("/tmp/hyprpm", std::filesystem::perms::all, std::filesystem::perm_options::replace);
+    if (!std::filesystem::exists(getTempRoot())) {
+        std::filesystem::create_directory(getTempRoot());
+        std::filesystem::permissions(getTempRoot(), std::filesystem::perms::owner_all, std::filesystem::perm_options::replace);
     }
 
     if (!force && headersValid() == HEADERS_OK) {
@@ -430,7 +457,7 @@ bool CPluginManager::updateHeaders(bool force) {
     progress.print();
 
     const std::string USERNAME   = getpwuid(getuid())->pw_name;
-    const auto        WORKINGDIR = "/tmp/hyprpm/hyprland-" + USERNAME;
+    const auto        WORKINGDIR = getTempRoot() + "hyprland-" + USERNAME;
 
     if (!createSafeDirectory(WORKINGDIR)) {
         std::println("\n{}", failureString("Could not prepare working dir for hl"));
@@ -448,12 +475,12 @@ bool CPluginManager::updateHeaders(bool force) {
     if (m_bVerbose && bShallow)
         progress.printMessageAbove(verboseString("will shallow since: {}", SHALLOW_DATE));
 
-    std::string ret =
-        execAndGet("cd /tmp/hyprpm && git clone --recursive https://github.com/hyprwm/Hyprland hyprland-" + USERNAME + (bShallow ? " --shallow-since='" + SHALLOW_DATE + "'" : ""));
+    std::string ret = execAndGet(std::format("cd {} && git clone --recursive https://github.com/hyprwm/Hyprland hyprland-{}{}", getTempRoot(), USERNAME,
+                                             (bShallow ? " --shallow-since='" + SHALLOW_DATE + "'" : "")));
 
     if (!std::filesystem::exists(WORKINGDIR)) {
         progress.printMessageAbove(failureString("Clone failed. Retrying without shallow."));
-        ret = execAndGet("cd /tmp/hyprpm && git clone --recursive https://github.com/hyprwm/hyprland hyprland-" + USERNAME);
+        ret = execAndGet(std::format("cd {} && git clone --recursive https://github.com/hyprwm/hyprland hyprland-{}", getTempRoot(), USERNAME));
     }
 
     if (!std::filesystem::exists(WORKINGDIR + "/.git")) {
@@ -568,7 +595,7 @@ bool CPluginManager::updatePlugins(bool forceUpdateAll) {
         return true;
     }
 
-    const auto   HLVER = getHyprlandVersion();
+    const auto   HLVER = getHyprlandVersion(false);
 
     CProgressBar progress;
     progress.m_iMaxSteps        = REPOS.size() * 2 + 2;
@@ -577,7 +604,7 @@ bool CPluginManager::updatePlugins(bool forceUpdateAll) {
     progress.print();
 
     const std::string USERNAME = getpwuid(getuid())->pw_name;
-    m_szWorkingPluginDirectory = "/tmp/hyprpm/" + USERNAME;
+    m_szWorkingPluginDirectory = getTempRoot() + USERNAME;
 
     for (auto const& repo : REPOS) {
         bool update = forceUpdateAll;
@@ -592,7 +619,7 @@ bool CPluginManager::updatePlugins(bool forceUpdateAll) {
 
         progress.printMessageAbove(infoString("Cloning {}", repo.url));
 
-        std::string ret = execAndGet("cd /tmp/hyprpm && git clone --recursive " + repo.url + " " + USERNAME);
+        std::string ret = execAndGet(std::format("cd {} && git clone --recursive {} {}", getTempRoot(), repo.url, USERNAME));
 
         if (!std::filesystem::exists(m_szWorkingPluginDirectory + "/.git")) {
             std::println("{}", failureString("could not clone repo: shell returned: {}", ret));
@@ -817,12 +844,20 @@ ePluginLoadStateReturn CPluginManager::ensurePluginsLoadState() {
         return "";
     };
 
+    // if any of the loadUnloadPlugin calls return false, this is true
+    // bcs that means the header version doesn't match the running version
+    // (and Hyprland needs to restart)
+    bool hyprlandVersionMismatch = false;
+
     // unload disabled plugins
     for (auto const& p : loadedPlugins) {
         if (!enabled(p)) {
             // unload
-            loadUnloadPlugin(HYPRPMPATH + repoForName(p) + "/" + p + ".so", false);
-            std::println("{}", successString("Unloaded {}", p));
+            if (!loadUnloadPlugin(HYPRPMPATH + repoForName(p) + "/" + p + ".so", false)) {
+                std::println("{}", infoString("{} will be unloaded after restarting Hyprland", p));
+                hyprlandVersionMismatch = true;
+            } else
+                std::println("{}", successString("Unloaded {}", p));
         }
     }
 
@@ -835,17 +870,28 @@ ePluginLoadStateReturn CPluginManager::ensurePluginsLoadState() {
             if (std::find_if(loadedPlugins.begin(), loadedPlugins.end(), [&](const auto& other) { return other == p.name; }) != loadedPlugins.end())
                 continue;
 
-            loadUnloadPlugin(HYPRPMPATH + repoForName(p.name) + "/" + p.filename, true);
-            std::println("{}", successString("Loaded {}", p.name));
+            if (!loadUnloadPlugin(HYPRPMPATH + repoForName(p.name) + "/" + p.filename, true)) {
+                std::println("{}", infoString("{} will be loaded after restarting Hyprland", p.name));
+                hyprlandVersionMismatch = true;
+            } else
+                std::println("{}", successString("Loaded {}", p.name));
         }
     }
 
     std::println("{}", successString("Plugin load state ensured"));
 
-    return LOADSTATE_OK;
+    return hyprlandVersionMismatch ? LOADSTATE_HYPRLAND_UPDATED : LOADSTATE_OK;
 }
 
 bool CPluginManager::loadUnloadPlugin(const std::string& path, bool load) {
+    auto state = DataState::getGlobalState();
+    auto HLVER = getHyprlandVersion(true);
+
+    if (state.headersHashCompiled != HLVER.hash) {
+        std::println("{}", infoString("Running Hyprland version differs from plugin state, please restart Hyprland."));
+        return false;
+    }
+
     if (load)
         execAndGet("hyprctl plugin load " + path);
     else

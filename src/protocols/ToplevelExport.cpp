@@ -109,7 +109,7 @@ CToplevelExportFrame::CToplevelExportFrame(SP<CHyprlandToplevelExportFrameV1> re
         return;
     }
 
-    const auto PSHMINFO = FormatUtils::getPixelFormatFromDRM(shmFormat);
+    const auto PSHMINFO = NFormatUtils::getPixelFormatFromDRM(shmFormat);
     if (!PSHMINFO) {
         LOGM(ERR, "No pixel format supported by renderer in capture toplevel");
         resource->sendFailed();
@@ -123,9 +123,9 @@ CToplevelExportFrame::CToplevelExportFrame(SP<CHyprlandToplevelExportFrameV1> re
 
     box.transform(wlTransformToHyprutils(PMONITOR->transform), PMONITOR->vecTransformedSize.x, PMONITOR->vecTransformedSize.y).round();
 
-    shmStride = FormatUtils::minStride(PSHMINFO, box.w);
+    shmStride = NFormatUtils::minStride(PSHMINFO, box.w);
 
-    resource->sendBuffer(FormatUtils::drmToShm(shmFormat), box.width, box.height, shmStride);
+    resource->sendBuffer(NFormatUtils::drmToShm(shmFormat), box.width, box.height, shmStride);
 
     if (dmabufFormat != DRM_FORMAT_INVALID) {
         resource->sendLinuxDmabuf(dmabufFormat, box.width, box.height);
@@ -255,7 +255,7 @@ bool CToplevelExportFrame::copyShm(timespec* now) {
     if (!g_pHyprRenderer->beginRender(PMONITOR, fakeDamage, RENDER_MODE_FULL_FAKE, nullptr, &outFB))
         return false;
 
-    g_pHyprOpenGL->clear(CColor(0, 0, 0, 1.0));
+    g_pHyprOpenGL->clear(CHyprColor(0, 0, 0, 1.0));
 
     // render client at 0,0
     g_pHyprRenderer->m_bBlockSurfaceFeedback = g_pHyprRenderer->shouldRenderWindow(pWindow); // block the feedback to avoid spamming the surface if it's visible
@@ -265,7 +265,7 @@ bool CToplevelExportFrame::copyShm(timespec* now) {
     if (overlayCursor)
         g_pPointerManager->renderSoftwareCursorsFor(PMONITOR->self.lock(), now, fakeDamage, g_pInputManager->getMouseCoordsInternal() - pWindow->m_vRealPosition.value());
 
-    const auto PFORMAT = FormatUtils::getPixelFormatFromDRM(shm.format);
+    const auto PFORMAT = NFormatUtils::getPixelFormatFromDRM(shm.format);
     if (!PFORMAT) {
         g_pHyprRenderer->endRender();
         return false;
@@ -308,7 +308,7 @@ bool CToplevelExportFrame::copyDmabuf(timespec* now) {
     if (!g_pHyprRenderer->beginRender(PMONITOR, fakeDamage, RENDER_MODE_TO_BUFFER, buffer.lock()))
         return false;
 
-    g_pHyprOpenGL->clear(CColor(0, 0, 0, 1.0));
+    g_pHyprOpenGL->clear(CHyprColor(0, 0, 0, 1.0));
 
     g_pHyprRenderer->m_bBlockSurfaceFeedback = g_pHyprRenderer->shouldRenderWindow(pWindow); // block the feedback to avoid spamming the surface if it's visible
     g_pHyprRenderer->renderWindow(pWindow, PMONITOR, now, false, RENDER_PASS_ALL, true, true);

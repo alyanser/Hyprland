@@ -45,7 +45,7 @@ CPointerConstraint::CPointerConstraint(SP<CZwpLockedPointerV1> resource_, SP<CWL
 }
 
 CPointerConstraint::CPointerConstraint(SP<CZwpConfinedPointerV1> resource_, SP<CWLSurfaceResource> surf, wl_resource* region_, zwpPointerConstraintsV1Lifetime lifetime_) :
-    resourceC(resource_), locked(false), lifetime(lifetime_) {
+    resourceC(resource_), lifetime(lifetime_) {
     if (!resource_->resource())
         return;
 
@@ -188,7 +188,7 @@ Vector2D CPointerConstraint::logicPositionHint() {
     const auto SURFBOX       = pHLSurface->getSurfaceBoxGlobal();
     const auto CONSTRAINTPOS = SURFBOX.has_value() ? SURFBOX->pos() : Vector2D{};
 
-    return hintSet ? CONSTRAINTPOS + positionHint : (locked ? CONSTRAINTPOS + SURFBOX->size() / 2.f : cursorPosOnActivate);
+    return hintSet ? CONSTRAINTPOS + positionHint : cursorPosOnActivate;
 }
 
 CPointerConstraintsProtocol::CPointerConstraintsProtocol(const wl_interface* iface, const int& ver, const std::string& name) : IWaylandProtocol(iface, ver, name) {
@@ -240,7 +240,7 @@ void CPointerConstraintsProtocol::onNewConstraint(SP<CPointerConstraint> constra
 
     OWNER->appendConstraint(constraint);
 
-    g_pInputManager->m_vConstraints.push_back(constraint);
+    g_pInputManager->m_vConstraints.emplace_back(constraint);
 }
 
 void CPointerConstraintsProtocol::onLockPointer(CZwpPointerConstraintsV1* pMgr, uint32_t id, wl_resource* surface, wl_resource* pointer, wl_resource* region,

@@ -323,6 +323,24 @@ void CXDGToplevelResource::close() {
     resource->sendClose();
 }
 
+Vector2D CXDGToplevelResource::layoutMinSize() {
+    Vector2D minSize;
+    if (current.minSize.x > 1)
+        minSize.x = owner ? current.minSize.x + owner->current.geometry.pos().x : current.minSize.x;
+    if (current.minSize.y > 1)
+        minSize.y = owner ? current.minSize.y + owner->current.geometry.pos().y : current.minSize.y;
+    return minSize;
+}
+
+Vector2D CXDGToplevelResource::layoutMaxSize() {
+    Vector2D maxSize;
+    if (current.maxSize.x > 1)
+        maxSize.x = owner ? current.maxSize.x + owner->current.geometry.pos().x : current.maxSize.x;
+    if (current.maxSize.y > 1)
+        maxSize.y = owner ? current.maxSize.y + owner->current.geometry.pos().y : current.maxSize.y;
+    return maxSize;
+}
+
 CXDGSurfaceResource::CXDGSurfaceResource(SP<CXdgSurface> resource_, SP<CXDGWMBase> owner_, SP<CWLSurfaceResource> surface_) :
     owner(owner_), surface(surface_), resource(resource_) {
     if (!good())
@@ -533,8 +551,8 @@ bool CXDGPositionerResource::good() {
     return resource->resource();
 }
 
-CXDGPositionerRules::CXDGPositionerRules(SP<CXDGPositionerResource> positioner) {
-    state = positioner->state;
+CXDGPositionerRules::CXDGPositionerRules(SP<CXDGPositionerResource> positioner) : state(positioner->state) {
+    ;
 }
 
 CBox CXDGPositionerRules::getPosition(CBox constraint, const Vector2D& parentCoord) {

@@ -1,5 +1,6 @@
 #include "ConfigManager.hpp"
 #include "../managers/KeybindManager.hpp"
+#include "../Compositor.hpp"
 
 #include "../render/decorations/CHyprGroupBarDecoration.hpp"
 #include "config/ConfigDataValues.hpp"
@@ -12,7 +13,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <hyprutils/path/Path.hpp>
-#include <string.h>
+#include <cstring>
 #include <string>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -30,6 +31,7 @@
 #include <filesystem>
 using namespace Hyprutils::String;
 
+//NOLINTNEXTLINE
 extern "C" char** environ;
 
 #include "ConfigDescriptions.hpp"
@@ -67,7 +69,10 @@ static Hyprlang::CParseResult configHandleGradientSet(const char* VALUE, void** 
         }
 
         try {
-            DATA->m_vColors.push_back(CColor(configStringToInt(var)));
+            const auto COL = configStringToInt(var);
+            if (!COL)
+                throw std::runtime_error(std::format("failed to parse {} as a color", var));
+            DATA->m_vColors.emplace_back(COL.value());
         } catch (std::exception& e) {
             Debug::log(WARN, "Error parsing gradient {}", V);
             parseError = "Error parsing gradient " + V + ": " + e.what();
@@ -76,10 +81,13 @@ static Hyprlang::CParseResult configHandleGradientSet(const char* VALUE, void** 
 
     if (DATA->m_vColors.size() == 0) {
         Debug::log(WARN, "Error parsing gradient {}", V);
-        parseError = "Error parsing gradient " + V + ": No colors?";
+        if (parseError.empty())
+            parseError = "Error parsing gradient " + V + ": No colors?";
 
-        DATA->m_vColors.push_back(0); // transparent
+        DATA->m_vColors.emplace_back(0); // transparent
     }
+
+    DATA->updateColorsOk();
 
     Hyprlang::CParseResult result;
     if (!parseError.empty())
@@ -377,6 +385,8 @@ CConfigManager::CConfigManager() {
     m_pConfig->addConfigValue("misc:middle_click_paste", Hyprlang::INT{1});
     m_pConfig->addConfigValue("misc:render_unfocused_fps", Hyprlang::INT{15});
     m_pConfig->addConfigValue("misc:disable_xdg_env_checks", Hyprlang::INT{0});
+    m_pConfig->addConfigValue("misc:disable_hyprland_qtutils_check", Hyprlang::INT{0});
+    m_pConfig->addConfigValue("misc:lockdead_screen_delay", Hyprlang::INT{1000});
 
     m_pConfig->addConfigValue("group:insert_after_current", Hyprlang::INT{1});
     m_pConfig->addConfigValue("group:focus_removed_window", Hyprlang::INT{1});
@@ -428,6 +438,8 @@ CConfigManager::CConfigManager() {
     m_pConfig->addConfigValue("decoration:blur:special", Hyprlang::INT{0});
     m_pConfig->addConfigValue("decoration:blur:popups", Hyprlang::INT{0});
     m_pConfig->addConfigValue("decoration:blur:popups_ignorealpha", {0.2F});
+    m_pConfig->addConfigValue("decoration:blur:input_methods", Hyprlang::INT{0});
+    m_pConfig->addConfigValue("decoration:blur:input_methods_ignorealpha", {0.2F});
     m_pConfig->addConfigValue("decoration:active_opacity", {1.F});
     m_pConfig->addConfigValue("decoration:inactive_opacity", {1.F});
     m_pConfig->addConfigValue("decoration:fullscreen_opacity", {1.F});
@@ -463,6 +475,7 @@ CConfigManager::CConfigManager() {
     m_pConfig->addConfigValue("master:mfact", {0.55f});
     m_pConfig->addConfigValue("master:new_status", {"slave"});
     m_pConfig->addConfigValue("master:always_center_master", Hyprlang::INT{0});
+    m_pConfig->addConfigValue("master:center_ignores_reserved", Hyprlang::INT{0});
     m_pConfig->addConfigValue("master:new_on_active", {"none"});
     m_pConfig->addConfigValue("master:new_on_top", Hyprlang::INT{0});
     m_pConfig->addConfigValue("master:orientation", {"left"});
@@ -531,8 +544,10 @@ CConfigManager::CConfigManager() {
     m_pConfig->addConfigValue("binds:focus_preferred_method", Hyprlang::INT{0});
     m_pConfig->addConfigValue("binds:ignore_group_lock", Hyprlang::INT{0});
     m_pConfig->addConfigValue("binds:movefocus_cycles_fullscreen", Hyprlang::INT{1});
+    m_pConfig->addConfigValue("binds:movefocus_cycles_groupfirst", Hyprlang::INT{0});
     m_pConfig->addConfigValue("binds:disable_keybind_grabbing", Hyprlang::INT{0});
     m_pConfig->addConfigValue("binds:window_direction_monitor_fallback", Hyprlang::INT{1});
+    m_pConfig->addConfigValue("binds:allow_pin_fullscreen", Hyprlang::INT{0});
 
     m_pConfig->addConfigValue("gestures:workspace_swipe", Hyprlang::INT{0});
     m_pConfig->addConfigValue("gestures:workspace_swipe_fingers", Hyprlang::INT{3});
@@ -594,6 +609,8 @@ CConfigManager::CConfigManager() {
     m_pConfig->addConfigValue("render:explicit_sync_kms", Hyprlang::INT{2});
     m_pConfig->addConfigValue("render:direct_scanout", Hyprlang::INT{0});
     m_pConfig->addConfigValue("render:expand_undersized_textures", Hyprlang::INT{1});
+
+    m_pConfig->addConfigValue("ecosystem:no_update_news", Hyprlang::INT{0});
 
     // devices
     m_pConfig->addSpecialCategory("device", {"name"});
@@ -667,7 +684,7 @@ CConfigManager::CConfigManager() {
     Debug::disableTime = reinterpret_cast<int64_t* const*>(m_pConfig->getConfigValuePtr("debug:disable_time")->getDataStaticPtr());
 
     if (ERR.has_value())
-        g_pHyprError->queueCreate(ERR.value(), CColor{1.0, 0.1, 0.1, 1.0});
+        g_pHyprError->queueCreate(ERR.value(), CHyprColor{1.0, 0.1, 0.1, 1.0});
 }
 
 std::optional<std::string> CConfigManager::generateConfig(std::string configPath) {
@@ -722,7 +739,7 @@ const std::string CConfigManager::getConfigString() {
     std::string configString;
     std::string currFileContent;
 
-    for (auto path : configPaths) {
+    for (const auto& path : configPaths) {
         std::ifstream configFile(path);
         configString += ("\n\nConfig File: " + path + ": ");
         if (!configFile.is_open()) {
@@ -874,14 +891,14 @@ void CConfigManager::postConfigReload(const Hyprlang::CParseResult& result) {
         m_szConfigErrors = "";
 
     if (result.error && !std::any_cast<Hyprlang::INT>(m_pConfig->getConfigValue("debug:suppress_errors")))
-        g_pHyprError->queueCreate(result.getError(), CColor(1.0, 50.0 / 255.0, 50.0 / 255.0, 1.0));
+        g_pHyprError->queueCreate(result.getError(), CHyprColor(1.0, 50.0 / 255.0, 50.0 / 255.0, 1.0));
     else if (std::any_cast<Hyprlang::INT>(m_pConfig->getConfigValue("autogenerated")) == 1)
         g_pHyprError->queueCreate(
             "Warning: You're using an autogenerated config! (config file: " + getMainConfigPath() +
                 " )\nSUPER+Q -> kitty (if it doesn't launch, make sure it's installed or choose a different terminal in the config)\nSUPER+M -> exit Hyprland",
-            CColor(1.0, 1.0, 70.0 / 255.0, 1.0));
+            CHyprColor(1.0, 1.0, 70.0 / 255.0, 1.0));
     else if (*PENABLEEXPLICIT != prevEnabledExplicit)
-        g_pHyprError->queueCreate("Warning: You changed the render:explicit_sync option, this requires you to restart Hyprland.", CColor(0.9, 0.76, 0.221, 1.0));
+        g_pHyprError->queueCreate("Warning: You changed the render:explicit_sync option, this requires you to restart Hyprland.", CHyprColor(0.9, 0.76, 0.221, 1.0));
     else
         g_pHyprError->destroy();
 
@@ -926,8 +943,8 @@ void CConfigManager::postConfigReload(const Hyprlang::CParseResult& result) {
     for (auto const& w : g_pCompositor->m_vWorkspaces) {
         if (w->inert())
             continue;
-        g_pCompositor->updateWorkspaceWindows(w->m_iID);
-        g_pCompositor->updateWorkspaceWindowData(w->m_iID);
+        w->updateWindows();
+        w->updateWindowData();
     }
 
     // Update window border colors
@@ -939,7 +956,8 @@ void CConfigManager::postConfigReload(const Hyprlang::CParseResult& result) {
     // manual crash
     if (std::any_cast<Hyprlang::INT>(m_pConfig->getConfigValue("debug:manual_crash")) && !m_bManualCrashInitiated) {
         m_bManualCrashInitiated = true;
-        g_pHyprNotificationOverlay->addNotification("Manual crash has been set up. Set debug:manual_crash back to 0 in order to crash the compositor.", CColor(0), 5000, ICON_INFO);
+        g_pHyprNotificationOverlay->addNotification("Manual crash has been set up. Set debug:manual_crash back to 0 in order to crash the compositor.", CHyprColor(0), 5000,
+                                                    ICON_INFO);
     } else if (m_bManualCrashInitiated && !std::any_cast<Hyprlang::INT>(m_pConfig->getConfigValue("debug:manual_crash"))) {
         // cowabunga it is
         g_pHyprRenderer->initiateManualCrash();
@@ -1006,7 +1024,7 @@ std::string CConfigManager::parseKeyword(const std::string& COMMAND, const std::
 
     if (COMMAND.contains("explicit")) {
         if (*PENABLEEXPLICIT != prevEnabledExplicit)
-            g_pHyprError->queueCreate("Warning: You changed the render:explicit_sync option, this requires you to restart Hyprland.", CColor(0.9, 0.76, 0.221, 1.0));
+            g_pHyprError->queueCreate("Warning: You changed the render:explicit_sync option, this requires you to restart Hyprland.", CHyprColor(0.9, 0.76, 0.221, 1.0));
         else
             g_pHyprError->destroy();
     }
@@ -1018,7 +1036,7 @@ std::string CConfigManager::parseKeyword(const std::string& COMMAND, const std::
     if (std::any_cast<Hyprlang::INT>(m_pConfig->getConfigValue("debug:manual_crash")) && !m_bManualCrashInitiated) {
         m_bManualCrashInitiated = true;
         if (g_pHyprNotificationOverlay) {
-            g_pHyprNotificationOverlay->addNotification("Manual crash has been set up. Set debug:manual_crash back to 0 in order to crash the compositor.", CColor(0), 5000,
+            g_pHyprNotificationOverlay->addNotification("Manual crash has been set up. Set debug:manual_crash back to 0 in order to crash the compositor.", CHyprColor(0), 5000,
                                                         ICON_INFO);
         }
     } else if (m_bManualCrashInitiated && !std::any_cast<Hyprlang::INT>(m_pConfig->getConfigValue("debug:manual_crash"))) {
@@ -1085,7 +1103,7 @@ Vector2D CConfigManager::getDeviceVec(const std::string& dev, const std::string&
 }
 
 std::string CConfigManager::getDeviceString(const std::string& dev, const std::string& v, const std::string& fallback) {
-    const auto VAL = std::string{std::any_cast<Hyprlang::STRING>(getConfigValueSafeDevice(dev, v, fallback)->getValue())};
+    auto VAL = std::string{std::any_cast<Hyprlang::STRING>(getConfigValueSafeDevice(dev, v, fallback)->getValue())};
 
     if (VAL == STRVAL_EMPTY)
         return "";
@@ -1662,7 +1680,7 @@ SAnimationPropertyConfig* CConfigManager::getAnimationPropertyConfig(const std::
 }
 
 void CConfigManager::addParseError(const std::string& err) {
-    g_pHyprError->queueCreate(err + "\nHyprland may not work correctly.", CColor(1.0, 50.0 / 255.0, 50.0 / 255.0, 1.0));
+    g_pHyprError->queueCreate(err + "\nHyprland may not work correctly.", CHyprColor(1.0, 50.0 / 255.0, 50.0 / 255.0, 1.0));
 }
 
 PHLMONITOR CConfigManager::getBoundMonitorForWS(const std::string& wsname) {
@@ -1703,11 +1721,11 @@ void CConfigManager::handlePluginLoads() {
         std::stringstream error;
         error << "Failed to load the following plugins:";
 
-        for (auto path : failedPlugins) {
+        for (const auto& path : failedPlugins) {
             error << "\n" << path;
         }
 
-        g_pHyprError->queueCreate(error.str(), CColor(1.0, 50.0 / 255.0, 50.0 / 255.0, 1.0));
+        g_pHyprError->queueCreate(error.str(), CHyprColor(1.0, 50.0 / 255.0, 50.0 / 255.0, 1.0));
     }
 
     if (pluginsChanged) {
@@ -2100,13 +2118,13 @@ std::optional<std::string> CConfigManager::handleAnimation(const std::string& co
     PANIM->second.pValues    = &PANIM->second;
 
     // This helper casts strings like "1", "true", "off", "yes"... to int.
-    int64_t enabledInt = configStringToInt(ARGS[1]) == 1;
+    int64_t enabledInt = configStringToInt(ARGS[1]).value_or(0) == 1;
 
     // Checking that the int is 1 or 0 because the helper can return integers out of range.
     if (enabledInt != 0 && enabledInt != 1)
         return "invalid animation on/off state";
 
-    PANIM->second.internalEnabled = configStringToInt(ARGS[1]) == 1;
+    PANIM->second.internalEnabled = configStringToInt(ARGS[1]).value_or(0) == 1;
 
     if (PANIM->second.internalEnabled) {
         // speed
@@ -2134,7 +2152,7 @@ std::optional<std::string> CConfigManager::handleAnimation(const std::string& co
         PANIM->second.internalStyle = ARGS[4];
 
         if (ARGS[4] != "") {
-            const auto ERR = g_pAnimationManager->styleValidInConfigVar(ANIMNAME, ARGS[4]);
+            auto ERR = g_pAnimationManager->styleValidInConfigVar(ANIMNAME, ARGS[4]);
 
             if (ERR != "")
                 return ERR;
@@ -2223,10 +2241,10 @@ std::optional<std::string> CConfigManager::handleBind(const std::string& command
     std::set<xkb_keysym_t> MODS;
 
     if (multiKey) {
-        for (auto splitKey : CVarList(ARGS[1], 8, '&')) {
+        for (const auto& splitKey : CVarList(ARGS[1], 8, '&')) {
             KEYSYMS.insert(xkb_keysym_from_name(splitKey.c_str(), XKB_KEYSYM_CASE_INSENSITIVE));
         }
-        for (auto splitMod : CVarList(ARGS[0], 8, '&')) {
+        for (const auto& splitMod : CVarList(ARGS[0], 8, '&')) {
             MODS.insert(xkb_keysym_from_name(splitMod.c_str(), XKB_KEYSYM_CASE_INSENSITIVE));
         }
     }
@@ -2292,14 +2310,15 @@ bool windowRuleValid(const std::string& RULE) {
         "float", "fullscreen", "maximize", "noinitialfocus", "pin", "stayfocused", "tile", "renderunfocused",
     };
     static const auto rulesPrefix = std::vector<std::string>{
-        "animation", "bordercolor", "bordersize", "center", "fullscreenstate", "group", "idleinhibit",   "maxsize", "minsize",   "monitor",
-        "move",      "opacity",     "plugin:",    "pseudo", "rounding",        "size",  "suppressevent", "tag",     "workspace", "xray",
+        "animation", "bordercolor", "bordersize", "center",   "fullscreenstate", "group",          "idleinhibit", "maxsize",       "minsize", "monitor",   "move",
+        "opacity",   "plugin:",     "pseudo",     "rounding", "scrollmouse",     "scrolltouchpad", "size",        "suppressevent", "tag",     "workspace", "xray",
     };
 
     const auto VALS = CVarList(RULE, 2, ' ');
     return rules.contains(RULE) || std::any_of(rulesPrefix.begin(), rulesPrefix.end(), [&RULE](auto prefix) { return RULE.starts_with(prefix); }) ||
         (g_pConfigManager->mbWindowProperties.find(VALS[0]) != g_pConfigManager->mbWindowProperties.end()) ||
-        (g_pConfigManager->miWindowProperties.find(VALS[0]) != g_pConfigManager->miWindowProperties.end());
+        (g_pConfigManager->miWindowProperties.find(VALS[0]) != g_pConfigManager->miWindowProperties.end()) ||
+        (g_pConfigManager->mfWindowProperties.find(VALS[0]) != g_pConfigManager->mfWindowProperties.end());
 }
 
 bool layerRuleValid(const std::string& RULE) {
@@ -2614,7 +2633,14 @@ std::optional<std::string> CConfigManager::handleWorkspaceRules(const std::strin
     const static std::string ruleOnCreatedEmpty    = "on-created-empty:";
     const static auto        ruleOnCreatedEmptyLen = ruleOnCreatedEmpty.length();
 
-    auto                     assignRule = [&](std::string rule) -> std::optional<std::string> {
+#define CHECK_OR_THROW(expr)                                                                                                                                                       \
+                                                                                                                                                                                   \
+    auto X = expr;                                                                                                                                                                 \
+    if (!X) {                                                                                                                                                                      \
+        return "Failed parsing a workspace rule";                                                                                                                                  \
+    }
+
+    auto assignRule = [&](std::string rule) -> std::optional<std::string> {
         size_t delim = std::string::npos;
         if ((delim = rule.find("gapsin:")) != std::string::npos) {
             CVarList varlist = CVarList(rule.substr(delim + 7), 0, ' ');
@@ -2632,25 +2658,32 @@ std::optional<std::string> CConfigManager::handleWorkspaceRules(const std::strin
             try {
                 wsRule.borderSize = std::stoi(rule.substr(delim + 11));
             } catch (...) { return "Error parsing workspace rule bordersize: {}", rule.substr(delim + 11); }
-        else if ((delim = rule.find("border:")) != std::string::npos)
-            wsRule.noBorder = !configStringToInt(rule.substr(delim + 7));
-        else if ((delim = rule.find("shadow:")) != std::string::npos)
-            wsRule.noShadow = !configStringToInt(rule.substr(delim + 7));
-        else if ((delim = rule.find("rounding:")) != std::string::npos)
-            wsRule.noRounding = !configStringToInt(rule.substr(delim + 9));
-        else if ((delim = rule.find("decorate:")) != std::string::npos)
-            wsRule.decorate = configStringToInt(rule.substr(delim + 9));
-        else if ((delim = rule.find("monitor:")) != std::string::npos)
+        else if ((delim = rule.find("border:")) != std::string::npos) {
+            CHECK_OR_THROW(configStringToInt(rule.substr(delim + 7)))
+            wsRule.noBorder = !*X;
+        } else if ((delim = rule.find("shadow:")) != std::string::npos) {
+            CHECK_OR_THROW(configStringToInt(rule.substr(delim + 7)))
+            wsRule.noShadow = !*X;
+        } else if ((delim = rule.find("rounding:")) != std::string::npos) {
+            CHECK_OR_THROW(configStringToInt(rule.substr(delim + 9)))
+            wsRule.noRounding = !*X;
+        } else if ((delim = rule.find("decorate:")) != std::string::npos) {
+            CHECK_OR_THROW(configStringToInt(rule.substr(delim + 9)))
+            wsRule.decorate = *X;
+        } else if ((delim = rule.find("monitor:")) != std::string::npos)
             wsRule.monitor = rule.substr(delim + 8);
-        else if ((delim = rule.find("default:")) != std::string::npos)
-            wsRule.isDefault = configStringToInt(rule.substr(delim + 8));
-        else if ((delim = rule.find("persistent:")) != std::string::npos)
-            wsRule.isPersistent = configStringToInt(rule.substr(delim + 11));
-        else if ((delim = rule.find("defaultName:")) != std::string::npos)
+        else if ((delim = rule.find("default:")) != std::string::npos) {
+            CHECK_OR_THROW(configStringToInt(rule.substr(delim + 8)))
+            wsRule.isDefault = *X;
+        } else if ((delim = rule.find("persistent:")) != std::string::npos) {
+            CHECK_OR_THROW(configStringToInt(rule.substr(delim + 11)))
+            wsRule.isPersistent = *X;
+        } else if ((delim = rule.find("defaultName:")) != std::string::npos)
             wsRule.defaultName = rule.substr(delim + 12);
-        else if ((delim = rule.find(ruleOnCreatedEmpty)) != std::string::npos)
-            wsRule.onCreatedEmptyRunCmd = cleanCmdForWorkspace(name, rule.substr(delim + ruleOnCreatedEmptyLen));
-        else if ((delim = rule.find("layoutopt:")) != std::string::npos) {
+        else if ((delim = rule.find(ruleOnCreatedEmpty)) != std::string::npos) {
+            CHECK_OR_THROW(cleanCmdForWorkspace(name, rule.substr(delim + ruleOnCreatedEmptyLen)))
+            wsRule.onCreatedEmptyRunCmd = *X;
+        } else if ((delim = rule.find("layoutopt:")) != std::string::npos) {
             std::string opt = rule.substr(delim + 10);
             if (!opt.contains(":")) {
                 // invalid
@@ -2658,14 +2691,16 @@ std::optional<std::string> CConfigManager::handleWorkspaceRules(const std::strin
                 return "Invalid workspace rule found: " + rule;
             }
 
-            std::string val = opt.substr(opt.find(":") + 1);
-            opt             = opt.substr(0, opt.find(":"));
+            std::string val = opt.substr(opt.find(':') + 1);
+            opt             = opt.substr(0, opt.find(':'));
 
             wsRule.layoutopts[opt] = val;
         }
 
         return {};
     };
+
+#undef CHECK_OR_THROW
 
     CVarList rulesList{rules, 0, ',', true};
     for (auto const& r : rulesList) {

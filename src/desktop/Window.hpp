@@ -21,14 +21,14 @@
 class CXDGSurfaceResource;
 class CXWaylandSurface;
 
-enum eIdleInhibitMode {
+enum eIdleInhibitMode : uint8_t {
     IDLEINHIBIT_NONE = 0,
     IDLEINHIBIT_ALWAYS,
     IDLEINHIBIT_FULLSCREEN,
     IDLEINHIBIT_FOCUS
 };
 
-enum eGroupRules {
+enum eGroupRules : uint8_t {
     // effective only during first map, except for _ALWAYS variant
     GROUP_NONE        = 0,
     GROUP_SET         = 1 << 0, // Open as new group or add to focused group
@@ -40,7 +40,7 @@ enum eGroupRules {
     GROUP_OVERRIDE    = 1 << 6, // Override other rules
 };
 
-enum eGetWindowProperties {
+enum eGetWindowProperties : uint8_t {
     WINDOW_ONLY      = 0,
     RESERVED_EXTENTS = 1 << 0,
     INPUT_EXTENTS    = 1 << 1,
@@ -50,7 +50,7 @@ enum eGetWindowProperties {
     USE_PROP_TILED   = 1 << 5,
 };
 
-enum eSuppressEvents {
+enum eSuppressEvents : uint8_t {
     SUPPRESS_NONE               = 0,
     SUPPRESS_FULLSCREEN         = 1 << 0,
     SUPPRESS_MAXIMIZE           = 1 << 1,
@@ -64,7 +64,7 @@ struct SAlphaValue {
     float m_fAlpha;
     bool  m_bOverride;
 
-    float applyAlpha(float alpha) {
+    float applyAlpha(float alpha) const {
         if (m_bOverride)
             return m_fAlpha;
         else
@@ -72,8 +72,8 @@ struct SAlphaValue {
     };
 };
 
-enum eOverridePriority {
-    PRIORITY_LAYOUT,
+enum eOverridePriority : uint8_t {
+    PRIORITY_LAYOUT = 0,
     PRIORITY_WORKSPACE_RULE,
     PRIORITY_WINDOW_RULE,
     PRIORITY_SET_PROP,
@@ -85,9 +85,7 @@ class CWindowOverridableVar {
     CWindowOverridableVar(T const& value, eOverridePriority priority) {
         values[priority] = value;
     }
-    CWindowOverridableVar(T const& value) {
-        defaultValue = value;
-    }
+    CWindowOverridableVar(T const& value) : defaultValue{value} {}
 
     CWindowOverridableVar()  = default;
     ~CWindowOverridableVar() = default;
@@ -186,6 +184,9 @@ struct SWindowData {
     CWindowOverridableVar<int>                rounding;
     CWindowOverridableVar<int>                borderSize;
 
+    CWindowOverridableVar<float>              scrollMouse;
+    CWindowOverridableVar<float>              scrollTouchpad;
+
     CWindowOverridableVar<std::string>        animationStyle;
     CWindowOverridableVar<Vector2D>           maxSize;
     CWindowOverridableVar<Vector2D>           minSize;
@@ -219,7 +220,7 @@ struct SInitialWorkspaceToken {
     std::string  workspace;
 };
 
-struct sFullscreenState {
+struct SFullscreenState {
     eFullscreenMode internal = FSMODE_NONE;
     eFullscreenMode client   = FSMODE_NONE;
 };
@@ -278,7 +279,7 @@ class CWindow {
     bool             m_bIsFloating      = false;
     bool             m_bDraggingTiled   = false; // for dragging around tiled windows
     bool             m_bWasMaximized    = false;
-    sFullscreenState m_sFullscreenState = {.internal = FSMODE_NONE, .client = FSMODE_NONE};
+    SFullscreenState m_sFullscreenState = {.internal = FSMODE_NONE, .client = FSMODE_NONE};
     std::string      m_szTitle          = "";
     std::string      m_szClass          = "";
     std::string      m_szInitialTitle   = "";
@@ -332,6 +333,9 @@ class CWindow {
     // For pinned (sticky) windows
     bool m_bPinned = false;
 
+    // For preserving pinned state when fullscreening a pinned window
+    bool m_bPinFullscreened = false;
+
     // urgency hint
     bool m_bIsUrgent = false;
 
@@ -353,7 +357,7 @@ class CWindow {
     CAnimatedVariable<float> m_fActiveInactiveAlpha;
 
     // animated shadow color
-    CAnimatedVariable<CColor> m_cRealShadowColor;
+    CAnimatedVariable<CHyprColor> m_cRealShadowColor;
 
     // animated tint
     CAnimatedVariable<float> m_fDimPercent;
@@ -397,18 +401,15 @@ class CWindow {
     CTagKeeper m_tags;
 
     // For the list lookup
-    bool operator==(const CWindow& rhs) {
+    bool operator==(const CWindow& rhs) const {
         return m_pXDGSurface == rhs.m_pXDGSurface && m_pXWaylandSurface == rhs.m_pXWaylandSurface && m_vPosition == rhs.m_vPosition && m_vSize == rhs.m_vSize &&
             m_bFadingOut == rhs.m_bFadingOut;
     }
 
     // methods
-    CBox        getFullWindowBoundingBox();
-    SBoxExtents getFullWindowExtents();
-    CBox        getWindowBoxUnified(uint64_t props);
-    inline CBox getWindowMainSurfaceBox() const {
-        return {m_vRealPosition.value().x, m_vRealPosition.value().y, m_vRealSize.value().x, m_vRealSize.value().y};
-    }
+    CBox                   getFullWindowBoundingBox();
+    SBoxExtents            getFullWindowExtents();
+    CBox                   getWindowBoxUnified(uint64_t props);
     CBox                   getWindowIdealBoundingBoxIgnoreReserved();
     void                   addWindowDeco(std::unique_ptr<IHyprWindowDecoration> deco);
     void                   updateWindowDecos();
@@ -421,7 +422,7 @@ class CWindow {
     void                   updateToplevel();
     void                   updateSurfaceScaleTransformDetails(bool force = false);
     void                   moveToWorkspace(PHLWORKSPACE);
-    PHLWINDOW              X11TransientFor();
+    PHLWINDOW              x11TransientFor();
     void                   onUnmap();
     void                   onMap();
     void                   setHidden(bool hidden);
@@ -441,19 +442,17 @@ class CWindow {
     void                   activate(bool force = false);
     int                    surfacesCount();
     void                   clampWindowSize(const std::optional<Vector2D> minSize, const std::optional<Vector2D> maxSize);
-
     bool                   isFullscreen();
     bool                   isEffectiveInternalFSMode(const eFullscreenMode);
-
     int                    getRealBorderSize();
+    float                  getScrollMouse();
+    float                  getScrollTouchpad();
     void                   updateWindowData();
     void                   updateWindowData(const struct SWorkspaceRule&);
-
     void                   onBorderAngleAnimEnd(void* ptr);
     bool                   isInCurvedCorner(double x, double y);
     bool                   hasPopupAt(const Vector2D& pos);
     int                    popupsCount();
-
     void                   applyGroupRules();
     void                   createGroup();
     void                   destroyGroup();
@@ -476,11 +475,17 @@ class CWindow {
     void                   onResourceChangeX11();
     std::string            fetchTitle();
     std::string            fetchClass();
-    void                   warpCursor();
+    void                   warpCursor(bool force = false);
     PHLWINDOW              getSwallower();
     void                   unsetWindowData(eOverridePriority priority);
     bool                   isX11OverrideRedirect();
     bool                   isModal();
+    Vector2D               requestedMinSize();
+    Vector2D               requestedMaxSize();
+
+    CBox                   getWindowMainSurfaceBox() const {
+        return {m_vRealPosition.value().x, m_vRealPosition.value().y, m_vRealSize.value().x, m_vRealSize.value().y};
+    }
 
     // listeners
     void onAck(uint32_t serial);

@@ -134,7 +134,7 @@ void Events::listener_mapWindow(void* owner, void* data) {
     // window rules
     PWINDOW->m_vMatchedRules = g_pConfigManager->getMatchingRules(PWINDOW, false);
     std::optional<eFullscreenMode>  requestedInternalFSMode, requestedClientFSMode;
-    std::optional<sFullscreenState> requestedFSState;
+    std::optional<SFullscreenState> requestedFSState;
     if (PWINDOW->m_bWantsInitialFullscreen || (PWINDOW->m_bIsX11 && PWINDOW->m_pXWaylandSurface->fullscreen))
         requestedClientFSMode = FSMODE_FULLSCREEN;
 
@@ -206,7 +206,7 @@ void Events::listener_mapWindow(void* owner, void* data) {
             try {
                 clientMode = std::stoi(ARGS[1]);
             } catch (std::exception& e) { clientMode = 0; }
-            requestedFSState = sFullscreenState{.internal = (eFullscreenMode)internalMode, .client = (eFullscreenMode)clientMode};
+            requestedFSState = SFullscreenState{.internal = (eFullscreenMode)internalMode, .client = (eFullscreenMode)clientMode};
         } else if (r.szRule.starts_with("suppressevent")) {
             CVarList vars(r.szRule, 0, 's', true);
             for (size_t i = 1; i < vars.size(); ++i) {
@@ -346,7 +346,7 @@ void Events::listener_mapWindow(void* owner, void* data) {
                     const auto  SIZEXSTR = VALUE.substr(0, VALUE.find(' '));
                     const auto  SIZEYSTR = VALUE.substr(VALUE.find(' ') + 1);
 
-                    const auto  MAXSIZE = g_pXWaylandManager->getMaxSizeForWindow(PWINDOW);
+                    const auto  MAXSIZE = PWINDOW->requestedMaxSize();
 
                     const float SIZEX = SIZEXSTR == "max" ? std::clamp(MAXSIZE.x, MIN_WINDOW_SIZE, PMONITOR->vecSize.x) :
                                                             stringToFloatClamp(SIZEXSTR, PWINDOW->m_vRealSize.goal().x, PMONITOR->vecSize.x);
@@ -469,7 +469,7 @@ void Events::listener_mapWindow(void* owner, void* data) {
                     const auto  SIZEXSTR = VALUE.substr(0, VALUE.find(' '));
                     const auto  SIZEYSTR = VALUE.substr(VALUE.find(' ') + 1);
 
-                    const auto  MAXSIZE = g_pXWaylandManager->getMaxSizeForWindow(PWINDOW);
+                    const auto  MAXSIZE = PWINDOW->requestedMaxSize();
 
                     const float SIZEX = SIZEXSTR == "max" ? std::clamp(MAXSIZE.x, MIN_WINDOW_SIZE, PMONITOR->vecSize.x) : stringToPercentage(SIZEXSTR, PMONITOR->vecSize.x);
 
@@ -509,7 +509,7 @@ void Events::listener_mapWindow(void* owner, void* data) {
         else if (*PNEWTAKESOVERFS == 1)
             requestedInternalFSMode = PWINDOW->m_pWorkspace->m_efFullscreenMode;
         else if (*PNEWTAKESOVERFS == 2)
-            g_pCompositor->setWindowFullscreenInternal(g_pCompositor->getFullscreenWindowOnWorkspace(PWINDOW->m_pWorkspace->m_iID), FSMODE_NONE);
+            g_pCompositor->setWindowFullscreenInternal(PWINDOW->m_pWorkspace->getFullscreenWindow(), FSMODE_NONE);
     }
 
     if (!PWINDOW->m_sWindowData.noFocus.valueOrDefault() && !PWINDOW->m_bNoInitialFocus &&
@@ -531,7 +531,7 @@ void Events::listener_mapWindow(void* owner, void* data) {
     if (!PWINDOW->m_bNoInitialFocus && (requestedInternalFSMode.has_value() || requestedClientFSMode.has_value() || requestedFSState.has_value())) {
         // fix fullscreen on requested (basically do a switcheroo)
         if (PWINDOW->m_pWorkspace->m_bHasFullscreenWindow)
-            g_pCompositor->setWindowFullscreenInternal(g_pCompositor->getFullscreenWindowOnWorkspace(PWINDOW->m_pWorkspace->m_iID), FSMODE_NONE);
+            g_pCompositor->setWindowFullscreenInternal(PWINDOW->m_pWorkspace->getFullscreenWindow(), FSMODE_NONE);
 
         PWINDOW->m_vRealPosition.warp();
         PWINDOW->m_vRealSize.warp();
@@ -539,7 +539,7 @@ void Events::listener_mapWindow(void* owner, void* data) {
             PWINDOW->m_sWindowData.syncFullscreen = CWindowOverridableVar(false, PRIORITY_WINDOW_RULE);
             g_pCompositor->setWindowFullscreenState(PWINDOW, requestedFSState.value());
         } else if (requestedInternalFSMode.has_value() && requestedClientFSMode.has_value() && !PWINDOW->m_sWindowData.syncFullscreen.valueOrDefault())
-            g_pCompositor->setWindowFullscreenState(PWINDOW, sFullscreenState{.internal = requestedInternalFSMode.value(), .client = requestedClientFSMode.value()});
+            g_pCompositor->setWindowFullscreenState(PWINDOW, SFullscreenState{.internal = requestedInternalFSMode.value(), .client = requestedClientFSMode.value()});
         else if (requestedInternalFSMode.has_value())
             g_pCompositor->setWindowFullscreenInternal(PWINDOW, requestedInternalFSMode.value());
         else if (requestedClientFSMode.has_value())
@@ -603,7 +603,8 @@ void Events::listener_mapWindow(void* owner, void* data) {
     // fix some xwayland apps that don't behave nicely
     PWINDOW->m_vReportedSize = PWINDOW->m_vPendingReportedSize;
 
-    g_pCompositor->updateWorkspaceWindows(PWINDOW->workspaceID());
+    if (PWINDOW->m_pWorkspace)
+        PWINDOW->m_pWorkspace->updateWindows();
 
     if (PMONITOR && PWINDOW->isX11OverrideRedirect())
         PWINDOW->m_fX11SurfaceScaledBy = PMONITOR->scale;
@@ -699,7 +700,7 @@ void Events::listener_unmapWindow(void* owner, void* data) {
                 g_pCompositor->setWindowFullscreenInternal(PWINDOWCANDIDATE, CURRENTFSMODE);
         }
 
-        if (!PWINDOWCANDIDATE && g_pCompositor->getWindowsOnWorkspace(PWINDOW->workspaceID()) == 0)
+        if (!PWINDOWCANDIDATE && PWINDOW->m_pWorkspace && PWINDOW->m_pWorkspace->getWindows() == 0)
             g_pInputManager->refocus();
 
         g_pInputManager->sendMotionEventsToFocused();
@@ -729,7 +730,8 @@ void Events::listener_unmapWindow(void* owner, void* data) {
     g_pInputManager->recheckIdleInhibitorStatus();
 
     // force report all sizes (QT sometimes has an issue with this)
-    g_pCompositor->forceReportSizesToWindowsOnWorkspace(PWINDOW->workspaceID());
+    if (PWINDOW->m_pWorkspace)
+        PWINDOW->m_pWorkspace->forceReportSizesToWindows();
 
     // update lastwindow after focus
     PWINDOW->onUnmap();
@@ -753,8 +755,8 @@ void Events::listener_commitWindow(void* owner, void* data) {
     PWINDOW->m_vReportedSize = PWINDOW->m_vPendingReportedSize; // apply pending size. We pinged, the window ponged.
 
     if (!PWINDOW->m_bIsX11 && !PWINDOW->isFullscreen() && PWINDOW->m_bIsFloating) {
-        const auto MINSIZE = PWINDOW->m_pXDGSurface->toplevel->current.minSize;
-        const auto MAXSIZE = PWINDOW->m_pXDGSurface->toplevel->current.maxSize;
+        const auto MINSIZE = PWINDOW->m_pXDGSurface->toplevel->layoutMinSize();
+        const auto MAXSIZE = PWINDOW->m_pXDGSurface->toplevel->layoutMaxSize();
 
         PWINDOW->clampWindowSize(MINSIZE, MAXSIZE > Vector2D{1, 1} ? std::optional<Vector2D>{MAXSIZE} : std::nullopt);
         g_pHyprRenderer->damageWindow(PWINDOW);

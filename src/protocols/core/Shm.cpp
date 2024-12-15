@@ -1,6 +1,7 @@
 #include "Shm.hpp"
 #include <algorithm>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <drm_fourcc.h>
 #include "../../render/Texture.hpp"
 #include "../types/WLBuffer.hpp"
@@ -18,9 +19,9 @@ CWLSHMBuffer::CWLSHMBuffer(SP<CWLSHMPoolResource> pool_, uint32_t id, int32_t of
     stride = stride_;
     fmt    = fmt_;
     offset = offset_;
-    opaque = FormatUtils::isFormatOpaque(FormatUtils::shmToDRM(fmt_));
+    opaque = NFormatUtils::isFormatOpaque(NFormatUtils::shmToDRM(fmt_));
 
-    texture = makeShared<CTexture>(FormatUtils::shmToDRM(fmt), (uint8_t*)pool->data + offset, stride, size_);
+    texture = makeShared<CTexture>(NFormatUtils::shmToDRM(fmt), (uint8_t*)pool->data + offset, stride, size_);
 
     resource = CWLBufferResource::create(makeShared<CWlBuffer>(pool_->resource->client(), 1, id));
 
@@ -55,7 +56,7 @@ Aquamarine::SSHMAttrs CWLSHMBuffer::shm() {
     Aquamarine::SSHMAttrs attrs;
     attrs.success = true;
     attrs.fd      = pool->fd;
-    attrs.format  = FormatUtils::shmToDRM(fmt);
+    attrs.format  = NFormatUtils::shmToDRM(fmt);
     attrs.size    = size;
     attrs.stride  = stride;
     attrs.offset  = offset;
@@ -75,11 +76,11 @@ bool CWLSHMBuffer::good() {
 }
 
 void CWLSHMBuffer::update(const CRegion& damage) {
-    texture->update(FormatUtils::shmToDRM(fmt), (uint8_t*)pool->data + offset, stride, damage);
+    texture->update(NFormatUtils::shmToDRM(fmt), (uint8_t*)pool->data + offset, stride, damage);
 }
 
-CSHMPool::CSHMPool(int fd_, size_t size_) : fd(fd_), size(size_) {
-    data = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+CSHMPool::CSHMPool(int fd_, size_t size_) : fd(fd_), size(size_), data(mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0)) {
+    ;
 }
 
 CSHMPool::~CSHMPool() {
@@ -99,9 +100,24 @@ void CSHMPool::resize(size_t size_) {
         LOGM(ERR, "Couldn't mmap {} bytes from fd {} of shm client", size, fd);
 }
 
+static int shmIsSizeValid(int fd, size_t size) {
+    struct stat st;
+    if (fstat(fd, &st) == -1) {
+        LOGM(ERR, "Couldn't get stat for fd {} of shm client", fd);
+        return 0;
+    }
+
+    return (size_t)st.st_size >= size;
+}
+
 CWLSHMPoolResource::CWLSHMPoolResource(SP<CWlShmPool> resource_, int fd_, size_t size_) : resource(resource_) {
     if (!good())
         return;
+
+    if (!shmIsSizeValid(fd_, size_)) {
+        resource_->error(-1, "The size of the file is not big enough for the shm pool");
+        return;
+    }
 
     pool = makeShared<CSHMPool>(fd_, size_);
 
@@ -113,6 +129,11 @@ CWLSHMPoolResource::CWLSHMPoolResource(SP<CWlShmPool> resource_, int fd_, size_t
             r->error(-1, "Shrinking a shm pool is illegal");
             return;
         }
+        if (!shmIsSizeValid(pool->fd, size_)) {
+            r->error(-1, "The size of the file is not big enough for the shm pool");
+            return;
+        }
+
         pool->resize(size_);
     });
 

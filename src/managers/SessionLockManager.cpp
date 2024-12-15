@@ -31,7 +31,7 @@ SSessionLockSurface::SSessionLockSurface(SP<CSessionLockSurface> surface_) : sur
     listeners.commit = surface_->events.commit.registerListener([this](std::any data) {
         const auto PMONITOR = g_pCompositor->getMonitorFromID(iMonitorID);
 
-        if (mapped && pWlrSurface != g_pCompositor->m_pLastFocus)
+        if (mapped && !g_pCompositor->m_pLastFocus)
             g_pInputManager->simulateMouseMovement();
 
         if (PMONITOR)
@@ -57,6 +57,7 @@ void CSessionLockManager::onNewSessionLock(SP<CSessionLock> pLock) {
 
     m_pSessionLock       = std::make_unique<SSessionLock>();
     m_pSessionLock->lock = pLock;
+    m_pSessionLock->mLockTimer.reset();
 
     m_pSessionLock->listeners.newSurface = pLock->events.newLockSurface.registerListener([this](std::any data) {
         auto       SURFACE = std::any_cast<SP<CSessionLockSurface>>(data);
@@ -175,4 +176,13 @@ bool CSessionLockManager::isSessionLockPresent() {
 
 bool CSessionLockManager::anySessionLockSurfacesPresent() {
     return m_pSessionLock && std::ranges::any_of(m_pSessionLock->vSessionLockSurfaces, [](const auto& surf) { return surf->mapped; });
+}
+
+bool CSessionLockManager::shallConsiderLockMissing() {
+    if (!m_pSessionLock)
+        return false;
+
+    static auto LOCKDEAD_SCREEN_DELAY = CConfigValue<Hyprlang::INT>("misc:lockdead_screen_delay");
+
+    return m_pSessionLock->mLockTimer.getMillis() > *LOCKDEAD_SCREEN_DELAY;
 }

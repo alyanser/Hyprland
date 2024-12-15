@@ -3,8 +3,6 @@
 #include "../Compositor.hpp"
 #include "../config/ConfigValue.hpp"
 
-int slowUpdate = 0;
-
 int handleTimer(void* data) {
     const auto  PTM = (CThreadManager*)data;
 
@@ -18,9 +16,7 @@ int handleTimer(void* data) {
     return 0;
 }
 
-CThreadManager::CThreadManager() {
-    m_esConfigTimer = wl_event_loop_add_timer(g_pCompositor->m_sWLEventLoop, handleTimer, this);
-
+CThreadManager::CThreadManager() : m_esConfigTimer(wl_event_loop_add_timer(g_pCompositor->m_sWLEventLoop, handleTimer, this)) {
     wl_event_source_timer_update(m_esConfigTimer, 1000);
 }
 
